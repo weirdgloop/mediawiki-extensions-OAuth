@@ -16,9 +16,11 @@ if ( getenv( 'MW_INSTALL_PATH' ) ) {
 
 require_once "$IP/maintenance/Maintenance.php";
 
+use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Title\Title;
 use MediaWiki\WikiMap\WikiMap;
+use Wikimedia\Rdbms\SelectQueryBuilder;
 
 class MigrateCentralWikiLogs extends Maintenance {
 	public function __construct() {
@@ -41,14 +43,12 @@ class MigrateCentralWikiLogs extends Maintenance {
 		$targetDb = $lbFactory->getMainLB( $targetWiki )
 			->getConnection( DB_PRIMARY, [], $targetWiki );
 
-		$targetMinTS = $targetDb->selectField(
-			'logging',
-			"MIN(log_timestamp)",
-			[
-				'log_type' => 'mwoauthconsumer',
-			],
-			__METHOD__
-		);
+		$targetMinTS = $targetDb->newSelectQueryBuilder()
+			->select( 'MIN(log_timestamp)' )
+			->from( 'logging' )
+			->where( [ 'log_type' => 'mwoauthconsumer' ] )
+			->caller( __METHOD__ )
+			->fetchField();
 
 		$lastMinTimestamp = null;
 		if ( $targetMinTS !== false ) {
@@ -64,26 +64,22 @@ class MigrateCentralWikiLogs extends Maintenance {
 			// This assumes that we don't have more than mBatchSize oauth log entries
 			// with the same timestamp. Otherwise this will go into an infinite loop.
 			if ( $lastMinTimestamp !== null ) {
-				$conds[] = 'log_timestamp < ' .
-					$oldDb->addQuotes( $oldDb->timestamp( $lastMinTimestamp ) );
+				$conds[] = $oldDb->expr( 'log_timestamp', '<', $oldDb->timestamp( $lastMinTimestamp ) );
 			}
 
-			$oldLoggs = $oldDb->select(
-				[ 'logging', 'actor' ] + $commentQuery['tables'],
-				[
+			$oldLoggs = $oldDb->newSelectQueryBuilder()
+				->select( [
 					'log_id', 'log_action', 'log_timestamp', 'log_params', 'log_deleted',
 					'actor_id', 'actor_name', 'actor_user'
-				] + $commentQuery['fields'],
-				$conds,
-				__METHOD__,
-				[
-					'ORDER BY' => 'log_timestamp DESC',
-					'LIMIT' => $this->mBatchSize + 1,
-				],
-				[
-					'actor' => [ 'JOIN', 'actor_id=log_actor' ]
-				] + $commentQuery['joins']
-			);
+				] )
+				->from( 'logging' )
+				->join( 'actor', null, 'actor_id=log_actor' )
+				->where( $conds )
+				->queryInfo( $commentQuery )
+				->orderBy( 'log_timestamp', SelectQueryBuilder::SORT_DESC )
+				->limit( $this->mBatchSize + 1 )
+				->caller( __METHOD__ )
+				->fetchResultSet();
 
 			$rowCount = $oldLoggs->numRows();
 
@@ -141,7 +137,7 @@ class MigrateCentralWikiLogs extends Maintenance {
 			}
 			$targetDb->commit( __METHOD__ );
 
-			$lbFactory->waitForReplication();
+			$this->waitForReplication();
 
 		} while ( $rowCount );
 	}

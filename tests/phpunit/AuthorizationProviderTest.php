@@ -10,11 +10,10 @@ use MediaWiki\Extension\OAuth\AuthorizationProvider\Grant\ClientCredentials;
 use MediaWiki\Extension\OAuth\AuthorizationProvider\Grant\RefreshToken;
 use MediaWiki\Extension\OAuth\AuthorizationProvider\IAuthorizationProvider;
 use MediaWiki\Extension\OAuth\AuthorizationServerFactory;
-use MediaWiki\MediaWikiServices;
+use MediaWiki\User\User;
 use MediaWikiIntegrationTestCase;
 use Psr\Log\NullLogger;
 use ReflectionClass;
-use User;
 use Wikimedia\TestingAccessWrapper;
 
 /**
@@ -30,8 +29,8 @@ class AuthorizationProviderTest extends MediaWikiIntegrationTestCase {
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->setMwGlobals( [
-			'wgOAuthSecretKey' => base64_encode( random_bytes( 32 ) )
+		$this->overrideConfigValues( [
+			'OAuthSecretKey' => base64_encode( random_bytes( 32 ) )
 		] );
 	}
 
@@ -42,7 +41,7 @@ class AuthorizationProviderTest extends MediaWikiIntegrationTestCase {
 	}
 
 	protected function getOAuthConfig() {
-		$services = MediaWikiServices::getInstance();
+		$services = $this->getServiceContainer();
 		return $services->getConfigFactory()->makeConfig( 'mwoauth' );
 	}
 
@@ -124,7 +123,7 @@ class AuthorizationProviderTest extends MediaWikiIntegrationTestCase {
 	 * @param int $expect Expected DateTimeInterval->getTimestamp()
 	 */
 	public function testGetGrantExpirationInterval( $global, $expect ) {
-		$this->setMwGlobals( [ 'wgOAuth2GrantExpirationInterval' => $global ] );
+		$this->overrideConfigValue( 'OAuth2GrantExpirationInterval', $global );
 
 		$server = $this->getServer();
 		/** @var IAuthorizationProvider $authorizationProvider */
@@ -151,7 +150,7 @@ class AuthorizationProviderTest extends MediaWikiIntegrationTestCase {
 	 * @param int $expect Expected DateTimeInterval->getTimestamp()
 	 */
 	public function testGetRefreshTokenTTL( $global, $expect ) {
-		$this->setMwGlobals( [ 'wgOAuth2RefreshTokenTTL' => $global ] );
+		$this->overrideConfigValue( 'OAuth2RefreshTokenTTL', $global );
 
 		$server = $this->getServer();
 		/** @var IAuthorizationProvider $authorizationProvider */

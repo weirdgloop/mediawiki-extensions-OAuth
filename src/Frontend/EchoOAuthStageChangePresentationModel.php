@@ -2,13 +2,13 @@
 
 namespace MediaWiki\Extension\OAuth\Frontend;
 
-use EchoAttributeManager;
+use MediaWiki\Extension\Notifications\AttributeManager;
 use MediaWiki\Extension\Notifications\Formatters\EchoEventPresentationModel;
 use MediaWiki\Extension\OAuth\Backend\Consumer;
 use MediaWiki\Extension\OAuth\Backend\Utils;
+use MediaWiki\SpecialPage\SpecialPage;
+use MediaWiki\User\User;
 use MWException;
-use SpecialPage;
-use User;
 
 class EchoOAuthStageChangePresentationModel extends EchoEventPresentationModel {
 	/** @var User[] OAuth admins who should be notified about additions to the review queue */
@@ -35,7 +35,7 @@ class EchoOAuthStageChangePresentationModel extends EchoEventPresentationModel {
 		}
 
 		return [
-			EchoAttributeManager::ATTR_LOCATORS => [
+			AttributeManager::ATTR_LOCATORS => [
 				[ [ Utils::class, 'locateUsersToNotify' ] ]
 			],
 			'category' => $category,

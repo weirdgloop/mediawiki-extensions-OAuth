@@ -2,15 +2,16 @@
 
 namespace MediaWiki\Extension\OAuth\Tests\Control;
 
+use MediaWiki\Context\RequestContext;
 use MediaWiki\Extension\OAuth\Backend\Consumer;
 use MediaWiki\Extension\OAuth\Backend\OAuth1Consumer;
 use MediaWiki\Extension\OAuth\Control\ConsumerSubmitControl;
 use MediaWiki\Extension\OAuth\Entity\ClientEntity;
+use MediaWiki\Status\Status;
+use MediaWiki\User\User;
 use MediaWiki\WikiMap\WikiMap;
 use MediaWikiIntegrationTestCase;
 use MWRestrictions;
-use RequestContext;
-use Status;
 use StatusValue;
 
 /**
@@ -19,38 +20,27 @@ use StatusValue;
  */
 class ConsumerSubmitControlTest extends MediaWikiIntegrationTestCase {
 
-	/**
-	 * @dataProvider provideSubmit_propose_OAuth1
-	 */
-	public function testSubmit_propose_OAuth1( array $data, StatusValue $expectedStatus ) {
-		$this->doSubmit( $data, $expectedStatus );
-	}
+	private User $owner;
 
-	/**
-	 * @dataProvider provideSubmit_propose_OAuth2
-	 */
-	public function testSubmit_propose_OAuth2( array $data, StatusValue $expectedStatus ) {
-		$this->doSubmit( $data, $expectedStatus );
-	}
-
-	private function doSubmit( array $data, StatusValue $expectedStatus, callable $consumerCheck = null ) {
-		global $wgGroupPermissions;
-		$this->setMwGlobals( [
-			'wgMWOAuthCentralWiki' => WikiMap::getCurrentWikiId(),
-			'wgOAuthAutoApprove' => [ [
+	/** @return OAuth1Consumer|ClientEntity|null */
+	private function doSubmit( array $data, StatusValue $expectedStatus ) {
+		$this->overrideConfigValues( [
+			'MWOAuthCentralWiki' => WikiMap::getCurrentWikiId(),
+			'OAuthAutoApprove' => [ [
 				'grants' => [ 'mwoauth-authonly', 'mwoauth-authonlyprivate', 'basic' ],
 			] ],
 		] );
-		$this->mergeMwGlobalArrayValue( 'wgGroupPermissions', [
-			'user' => [ 'mwoauthproposeconsumer' => true ] + $wgGroupPermissions['user'],
+		$this->setGroupPermissions( [
+			'user' => [ 'mwoauthproposeconsumer' => true ]
 		] );
 
 		$context = RequestContext::getMain();
-		$user = $this->getMutableTestUser( 'OAuthOwner' )->getUser();
+		$user = $this->getMutableTestUser()->getUser();
 		$user->setEmail( 'owner@wiki.domain' );
 		$user->confirmEmail();
 		$user->saveSettings();
 		$context->setUser( $user );
+		$this->owner = $user;
 
 		$dbw = $this->getDb();
 		$control = new ConsumerSubmitControl( $context, [], $dbw );
@@ -64,19 +54,17 @@ class ConsumerSubmitControlTest extends MediaWikiIntegrationTestCase {
 			? $this->assertStatusGood( $actualStatus )
 			: $this->assertStatusNotOK( $actualStatus );
 		$this->assertSame( $expectedStatus->isGood(), $actualStatus->isGood() );
-		if ( $expectedStatus->isOK() && $consumerCheck ) {
-			$this->assertArrayHasKey( 'consumer', $actualStatus->getValue() );
-			$consumerCheck( $actualStatus->getValue()['consumer'] );
-		}
 		if ( !$expectedStatus->isGood() ) {
 			$this->assertSame(
 				Status::wrap( $expectedStatus )->getWikiText( false, false, 'en' ),
 				Status::wrap( $actualStatus )->getWikiText( false, false, 'en' ) );
 		}
+
+		return $actualStatus->getValue()['result']['consumer'] ?? null;
 	}
 
-	public function provideSubmit_propose_OAuth1() {
-		$baseConsumerData = [
+	private function getBaseForOAuth1() {
+		return [
 			'oauthVersion' => Consumer::OAUTH_VERSION_1,
 			'name' => 'test consumer',
 			'version' => '1.0',
@@ -95,56 +83,58 @@ class ConsumerSubmitControlTest extends MediaWikiIntegrationTestCase {
 			'agreement' => true,
 			'action' => 'propose',
 		];
-
-		return [
-			'good' => [
-				$baseConsumerData,
-				StatusValue::newGood(),
-				function ( $consumer ) {
-					$owner = $this->getServiceContainer()->getUserFactory()->newFromName( 'OAuthOwner' );
-
-					$this->assertInstanceOf( OAuth1Consumer::class, $consumer );
-					/** @var OAuth1Consumer $consumer */
-					$this->assertSame( $owner->getId(), $consumer->getUserId() );
-					$this->assertFalse( $consumer->getOwnerOnly() );
-					$this->assertSame( [ 'editpage' ], $consumer->getGrants() );
-					$this->assertSame( Consumer::STAGE_PROPOSED, $consumer->getStage() );
-				},
-			],
-			'auto-approved' => [
-				[
-					'grants' => json_encode( [ 'basic' ] ),
-				] + $baseConsumerData,
-				StatusValue::newGood(),
-				function ( $consumer ) {
-					$this->assertSame( [ 'basic' ], $consumer->getGrants() );
-					$this->assertSame( Consumer::STAGE_APPROVED, $consumer->getStage() );
-				},
-			],
-			'invalid version string' => [
-				[
-					'version' => 'foo',
-				] + $baseConsumerData,
-				StatusValue::newFatal( 'mwoauth-invalid-field', 'version' ),
-			],
-			'bare domain' => [
-				[
-					'callbackUrl' => 'https://example.com/',
-				] + $baseConsumerData,
-				StatusValue::newFatal( 'mwoauth-error-callback-bare-domain-oauth1', ),
-			],
-			'ignore warnings' => [
-				[
-					'callbackUrl' => 'https://example.com/',
-					'ignorewarnings' => true,
-				] + $baseConsumerData,
-				StatusValue::newGood(),
-			],
-		];
 	}
 
-	public function provideSubmit_propose_OAuth2() {
-		$baseConsumerData = [
+	public function testSubmit_OAuth1_good() {
+		$consumer = $this->doSubmit( $this->getBaseForOAuth1(), StatusValue::newGood() );
+		$this->assertInstanceOf( OAuth1Consumer::class, $consumer );
+		$this->assertSame( $this->owner->getId(), $consumer->getUserId() );
+		$this->assertFalse( $consumer->getOwnerOnly() );
+		$this->assertSame( [ 'basic', 'editpage' ], $consumer->getGrants() );
+		$this->assertSame( Consumer::STAGE_PROPOSED, $consumer->getStage() );
+	}
+
+	public function testSubmit_OAuth1_autoApproved() {
+		$consumer = $this->doSubmit(
+			[
+				'grants' => json_encode( [ 'basic' ] ),
+			] + $this->getBaseForOAuth1(),
+			StatusValue::newGood()
+		);
+		$this->assertSame( [ 'basic' ], $consumer->getGrants() );
+		$this->assertSame( Consumer::STAGE_APPROVED, $consumer->getStage() );
+	}
+
+	public function testSubmit_OAuth1_invalidVersionString() {
+		$this->doSubmit(
+			[
+				'version' => 'foo',
+			] + $this->getBaseForOAuth1(),
+			StatusValue::newFatal( 'mwoauth-invalid-field', 'version' )
+		);
+	}
+
+	public function testSubmit_OAuth1_bareDomain() {
+		$this->doSubmit(
+			[
+				'callbackUrl' => 'https://example.com/',
+			] + $this->getBaseForOAuth1(),
+			StatusValue::newFatal( 'mwoauth-error-callback-bare-domain-oauth1' ),
+		);
+	}
+
+	public function testSubmit_OAuth1_ignoreWarwnings() {
+		$this->doSubmit(
+			[
+				'callbackUrl' => 'https://example.com/',
+				'ignorewarnings' => true,
+			] + $this->getBaseForOAuth1(),
+			StatusValue::newGood()
+		);
+	}
+
+	private function getBaseForOAuth2() {
+		return [
 			'oauthVersion' => Consumer::OAUTH_VERSION_2,
 			'name' => 'test',
 			'version' => '1.0',
@@ -163,21 +153,10 @@ class ConsumerSubmitControlTest extends MediaWikiIntegrationTestCase {
 			'agreement' => true,
 			'action' => 'propose',
 		];
-		$assertGoodConsumer = function ( $consumer ) {
-			$owner = $this->getServiceContainer()->getUserFactory()->newFromName( 'OAuthOwner' );
+	}
 
-			$this->assertInstanceOf( ClientEntity::class, $consumer );
-			/** @var ClientEntity $consumer */
-			$this->assertSame( $owner->getId(), $consumer->getUserId() );
-			$this->assertFalse( $consumer->getOwnerOnly() );
-			$this->assertSame( [ 'editpage' ], $consumer->getGrants() );
-		};
-
-		yield 'good' => [
-			$baseConsumerData,
-			StatusValue::newGood(),
-			$assertGoodConsumer,
-		];
+	public static function provideSubmit_OAuth2_good() {
+		yield 'good' => [];
 
 		foreach ( [
 			'localhost',
@@ -191,18 +170,31 @@ class ConsumerSubmitControlTest extends MediaWikiIntegrationTestCase {
 			yield "http protocol ($host), allowed" => [
 				[
 					'callbackUrl' => "http://$host:8080/oauth",
-				] + $baseConsumerData,
-				StatusValue::newGood(),
-				$assertGoodConsumer,
+				]
 			];
 		}
-
-		yield 'http protocol (non-localhost), not allowed' => [
-			[
-				'callbackUrl' => 'http://example.com',
-			] + $baseConsumerData,
-			StatusValue::newFatal( 'mwoauth-error-callback-url-must-be-https' ),
-		];
 	}
 
+	/**
+	 * @dataProvider provideSubmit_OAuth2_good
+	 */
+	public function testSubmit_OAuth2_good( array $data = [] ) {
+		$consumer = $this->doSubmit(
+			$data + $this->getBaseForOAuth2(),
+			StatusValue::newGood()
+		);
+		$this->assertInstanceOf( ClientEntity::class, $consumer );
+		$this->assertSame( $this->owner->getId(), $consumer->getUserId() );
+		$this->assertFalse( $consumer->getOwnerOnly() );
+		$this->assertSame( [ 'basic', 'editpage' ], $consumer->getGrants() );
+	}
+
+	public function testSubmit_OAuth2_nonLocalhostHttpNotAlllowed() {
+		$this->doSubmit(
+			[
+				'callbackUrl' => 'http://example.com',
+			] + $this->getBaseForOAuth2(),
+			StatusValue::newFatal( 'mwoauth-error-callback-url-must-be-https' )
+		);
+	}
 }

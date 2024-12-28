@@ -2,15 +2,15 @@
 
 namespace MediaWiki\Extension\OAuth\Backend;
 
-use BagOStuff;
 use InvalidArgumentException;
-use Linker;
 use MediaWiki\Extension\OAuth\Lib\OAuthConsumer;
 use MediaWiki\Extension\OAuth\Lib\OAuthDataStore;
+use MediaWiki\Linker\Linker;
 use MediaWiki\Logger\LoggerFactory;
-use Message;
+use MediaWiki\Message\Message;
 use MWCryptRand;
 use Psr\Log\LoggerInterface;
+use Wikimedia\ObjectCache\BagOStuff;
 use Wikimedia\Rdbms\IDatabase;
 
 class MWOAuthDataStore extends OAuthDataStore {

@@ -2,11 +2,11 @@
 
 namespace MediaWiki\Extension\OAuth\Backend;
 
-use Linker;
 use MediaWiki\Extension\OAuth\Lib\OAuthServer;
-use Message;
-use SpecialPage;
-use User;
+use MediaWiki\Linker\Linker;
+use MediaWiki\Message\Message;
+use MediaWiki\SpecialPage\SpecialPage;
+use MediaWiki\User\User;
 
 class MWOAuthServer extends OAuthServer {
 	/** @var MWOAuthDataStore */
@@ -77,6 +77,7 @@ class MWOAuthServer extends OAuthServer {
 		$this->checkCallback( $consumer, $callback );
 
 		$new_token = $this->data_store->new_request_token( $consumer, $callback );
+		// @phan-suppress-next-line PhanUndeclaredProperty Class uses AllowDynamicProperties for php8.2
 		$new_token->oauth_callback_confirmed = 'true';
 		return $new_token;
 	}
@@ -215,7 +216,7 @@ class MWOAuthServer extends OAuthServer {
 			// Anything in the request is ok if we do not have the URL part in
 			// the expected values
 			$match = true;
-		} elseif ( !array_key_exists( $part,  $got ) ) {
+		} elseif ( !array_key_exists( $part, $got ) ) {
 			$match = false;
 		} elseif ( $exact ) {
 			$match = $expect[$part] === $got[$part];

@@ -2,10 +2,9 @@
 
 namespace MediaWiki\Extension\OAuth\Frontend;
 
-use DerivativeContext;
-use Html;
-use HTMLForm;
 use MediaWiki\Cache\Hook\MessagesPreLoadHook;
+use MediaWiki\Context\DerivativeContext;
+use MediaWiki\Context\RequestContext;
 use MediaWiki\Extension\OAuth\Backend\Consumer;
 use MediaWiki\Extension\OAuth\Backend\Utils;
 use MediaWiki\Extension\OAuth\Control\ConsumerAccessControl;
@@ -13,18 +12,19 @@ use MediaWiki\Extension\OAuth\Control\ConsumerSubmitControl;
 use MediaWiki\Extension\OAuth\Frontend\SpecialPages\SpecialMWOAuthConsumerRegistration;
 use MediaWiki\Extension\OAuth\Frontend\SpecialPages\SpecialMWOAuthManageConsumers;
 use MediaWiki\Hook\LoginFormValidErrorMessagesHook;
+use MediaWiki\Html\Html;
+use MediaWiki\HTMLForm\HTMLForm;
+use MediaWiki\Parser\Sanitizer;
 use MediaWiki\Permissions\PermissionManager;
 use MediaWiki\Preferences\Hook\GetPreferencesHook;
 use MediaWiki\SpecialPage\Hook\SpecialPage_initListHook;
 use MediaWiki\SpecialPage\Hook\SpecialPageAfterExecuteHook;
 use MediaWiki\SpecialPage\Hook\SpecialPageBeforeFormDisplayHook;
+use MediaWiki\SpecialPage\SpecialPage;
+use MediaWiki\User\User;
 use MediaWiki\WikiMap\WikiMap;
 use MWException;
 use OOUI\ButtonWidget;
-use RequestContext;
-use Sanitizer;
-use SpecialPage;
-use User;
 
 /**
  * Class containing GUI even handler functions for an OAuth environment
@@ -59,19 +59,19 @@ class UIHooks implements
 	public function onGetPreferences( $user, &$preferences ) {
 		$dbr = Utils::getCentralDB( DB_REPLICA );
 		$conds = [
-			'oaac_consumer_id = oarc_id',
 			'oaac_user_id' => Utils::getCentralIdFromLocalUser( $user ),
 		];
 
 		if ( !$this->permissionManager->userHasRight( $user, 'mwoauthviewsuppressed' ) ) {
 			$conds['oarc_deleted'] = 0;
 		}
-		$count = $dbr->selectField(
-			[ 'oauth_accepted_consumer', 'oauth_registered_consumer' ],
-			'COUNT(*)',
-			$conds,
-			__METHOD__
-		);
+		$count = $dbr->newSelectQueryBuilder()
+			->select( 'COUNT(*)' )
+			->from( 'oauth_accepted_consumer' )
+			->join( 'oauth_registered_consumer', null, 'oaac_consumer_id = oarc_id' )
+			->where( $conds )
+			->caller( __METHOD__ )
+			->fetchField();
 
 		$control = new ButtonWidget( [
 			'href' => SpecialPage::getTitleFor( 'OAuthManageMyGrants' )->getLinkURL(),
@@ -264,6 +264,7 @@ class UIHooks implements
 			$specialPages['OAuthConsumerRegistration'] = [
 				'class' => SpecialMWOAuthConsumerRegistration::class,
 				'services' => [
+					'PermissionManager',
 					'GrantsInfo',
 					'GrantsLocalization',
 				],
@@ -283,7 +284,11 @@ class UIHooks implements
 	 * @return bool
 	 */
 	public function onLoginFormValidErrorMessages( &$messages ) {
-		$messages[] = 'mwoauth-login-required-reason';
+		$messages = array_merge( $messages, [
+			'mwoauth-named-account-required-reason',
+			'mwoauth-named-account-required-reason-for-temp-user',
+			'mwoauth-available-only-to-registered',
+		] );
 		return true;
 	}
 }

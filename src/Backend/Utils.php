@@ -2,20 +2,19 @@
 
 namespace MediaWiki\Extension\OAuth\Backend;
 
-use AutoCommitUpdate;
-use BagOStuff;
-use CentralIdLookup;
-use DeferredUpdates;
+use MediaWiki\Context\RequestContext;
+use MediaWiki\Deferred\AutoCommitUpdate;
+use MediaWiki\Deferred\DeferredUpdates;
 use MediaWiki\Extension\Notifications\Model\Event;
-use MediaWiki\Extension\OAuth\Lib\OAuthSignatureMethod_HMAC_SHA1;
+use MediaWiki\Extension\OAuth\Lib\OAuthSignatureMethodHmacSha1;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Request\WebRequest;
 use MediaWiki\Title\Title;
+use MediaWiki\User\CentralId\CentralIdLookup;
+use MediaWiki\User\User;
 use MediaWiki\WikiMap\WikiMap;
 use MWException;
-use ObjectCache;
-use RequestContext;
-use User;
-use WebRequest;
+use Wikimedia\ObjectCache\BagOStuff;
 use Wikimedia\Rdbms\IDatabase;
 
 /**
@@ -71,7 +70,8 @@ class Utils {
 		global $wgSessionCacheType;
 
 		$sessionCacheType = $wgMWOAuthSessionCacheType ?? $wgSessionCacheType;
-		return ObjectCache::getInstance( $sessionCacheType );
+		return MediaWikiServices::getInstance()
+			->getObjectCacheFactory()->getInstance( $sessionCacheType );
 	}
 
 	/**
@@ -83,7 +83,8 @@ class Utils {
 
 		$cacheType = $wgMWOAuthNonceCacheType
 			?? $wgMWOAuthSessionCacheType ?? $wgSessionCacheType;
-		return ObjectCache::getInstance( $cacheType );
+		return MediaWikiServices::getInstance()
+			->getObjectCacheFactory()->getInstance( $cacheType );
 	}
 
 	/**
@@ -91,12 +92,12 @@ class Utils {
 	 * @return int[]
 	 */
 	public static function getConsumerStateCounts( IDatabase $db ) {
-		$res = $db->select( 'oauth_registered_consumer',
-			[ 'oarc_stage', 'count' => 'COUNT(*)' ],
-			[],
-			__METHOD__,
-			[ 'GROUP BY' => 'oarc_stage' ]
-		);
+		$res = $db->newSelectQueryBuilder()
+			->select( [ 'oarc_stage', 'count' => 'COUNT(*)' ] )
+			->from( 'oauth_registered_consumer' )
+			->groupBy( 'oarc_stage' )
+			->caller( __METHOD__ )
+			->fetchResultSet();
 		$table = [
 			Consumer::STAGE_APPROVED => 0,
 			Consumer::STAGE_DISABLED => 0,
@@ -175,19 +176,18 @@ class Utils {
 				$dbw,
 				__METHOD__,
 				static function ( IDatabase $dbw ) use ( $cutoff, $fname ) {
-					$dbw->update(
-						'oauth_registered_consumer',
-						[
+					$dbw->newUpdateQueryBuilder()
+						->update( 'oauth_registered_consumer' )
+						->set( [
 							'oarc_stage' => Consumer::STAGE_EXPIRED,
 							'oarc_stage_timestamp' => $dbw->timestamp()
-						],
-						[
+						] )
+						->where( [
 							'oarc_stage' => Consumer::STAGE_PROPOSED,
-							'oarc_stage_timestamp < ' .
-								$dbw->addQuotes( $dbw->timestamp( $cutoff ) )
-						],
-						$fname
-					);
+							$dbw->expr( 'oarc_stage_timestamp', '<', $dbw->timestamp( $cutoff ) )
+						] )
+						->caller( $fname )
+						->execute();
 				}
 			)
 		);
@@ -238,8 +238,8 @@ class Utils {
 	public static function newMWOAuthServer() {
 		$store = static::newMWOAuthDataStore();
 		$server = new MWOAuthServer( $store );
-		$server->add_signature_method( new OAuthSignatureMethod_HMAC_SHA1() );
-		$server->add_signature_method( new MWOAuthSignatureMethod_RSA_SHA1( $store ) );
+		$server->add_signature_method( new OAuthSignatureMethodHmacSha1() );
+		$server->add_signature_method( new MWOAuthSignatureMethodRsaSha1( $store ) );
 
 		return $server;
 	}
@@ -398,11 +398,7 @@ class Utils {
 	public static function hmacDBSecret( $secret ) {
 		global $wgOAuthSecretKey, $wgSecretKey;
 
-		if ( empty( $wgOAuthSecretKey ) ) {
-			$secretKey = $wgSecretKey;
-		} else {
-			$secretKey = $wgOAuthSecretKey;
-		}
+		$secretKey = $wgOAuthSecretKey ?? $wgSecretKey;
 
 		return $secretKey ? hash_hmac( 'sha1', $secret, $secretKey ) : $secret;
 	}

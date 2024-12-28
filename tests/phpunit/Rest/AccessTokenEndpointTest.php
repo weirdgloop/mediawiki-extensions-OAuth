@@ -10,15 +10,15 @@ use MediaWiki\Rest\Handler;
  * @group OAuth
  * @group Database
  */
-class AccessTokenEndpointTest extends EndpointTest {
-	public function provideTestHandlerExecute() {
+class AccessTokenEndpointTest extends EndpointTestBase {
+	public static function provideTestHandlerExecute() {
 		return [
 			'normal' => [
 				[
 					'method' => 'POST',
 					'uri' => self::makeUri( '/oauth2/access_token' ),
 					'headers' => [
-						'Content-Type' => 'application/json'
+						'Content-Type' => 'application/x-www-form-urlencoded'
 					],
 					'postParams' => [
 						'grant_type' => 'authorization_code',

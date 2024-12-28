@@ -3,17 +3,17 @@
 namespace MediaWiki\Extension\OAuth\Backend;
 
 use Exception;
-use IContextSource;
-use IDBAccessObject;
 use LogicException;
+use MediaWiki\Context\IContextSource;
 use MediaWiki\Logger\LoggerFactory;
-use Message;
+use MediaWiki\Message\Message;
 use MWException;
 use Psr\Log\LoggerInterface;
 use stdClass;
 use Wikimedia\Rdbms\DBError;
 use Wikimedia\Rdbms\DBReadOnlyError;
 use Wikimedia\Rdbms\IDatabase;
+use Wikimedia\Rdbms\IDBAccessObject;
 
 /**
  * (c) Aaron Schulz 2013, GPL
@@ -37,7 +37,7 @@ use Wikimedia\Rdbms\IDatabase;
 /**
  * Representation of a Data Access Object
  */
-abstract class MWOAuthDAO implements IDBAccessObject {
+abstract class MWOAuthDAO {
 	/** @var string object construction origin */
 	private $daoOrigin = 'new';
 	/** @var bool whether fields changed or the field is new */
@@ -66,7 +66,7 @@ abstract class MWOAuthDAO implements IDBAccessObject {
 		$consumer = new $class();
 
 		// Make sure oauth_version is set - for backwards compat
-		$values['oauth_version'] = $values['oauth_version'] ?? Consumer::OAUTH_VERSION_1;
+		$values['oauth_version'] ??= Consumer::OAUTH_VERSION_1;
 		$consumer->loadFromValues( $values );
 		return $consumer;
 	}
@@ -96,17 +96,20 @@ abstract class MWOAuthDAO implements IDBAccessObject {
 	/**
 	 * @param IDatabase $db
 	 * @param int $id
-	 * @param int $flags MWOAuthDAO::READ_* bitfield
+	 * @param int $flags IDBAccessObject::READ_* bitfield
 	 * @return static|bool Returns false if not found
 	 * @throws DBError
 	 */
 	final public static function newFromId( IDatabase $db, $id, $flags = 0 ) {
-		$row = $db->selectRow( static::getTable(),
-			array_values( static::getFieldColumnMap() ),
-			[ static::getIdColumn() => (int)$id ],
-			__METHOD__,
-			( $flags & self::READ_LOCKING ) ? [ 'FOR UPDATE' ] : []
-		);
+		$queryBuilder = $db->newSelectQueryBuilder()
+			->select( array_values( static::getFieldColumnMap() ) )
+			->from( static::getTable() )
+			->where( [ static::getIdColumn() => (int)$id ] )
+			->caller( __METHOD__ );
+		if ( $flags & IDBAccessObject::READ_LOCKING ) {
+			$queryBuilder->forUpdate();
+		}
+		$row = $queryBuilder->fetchRow();
 
 		if ( $row ) {
 			$class = static::getConsumerClass( (array)$row );
@@ -191,12 +194,12 @@ abstract class MWOAuthDAO implements IDBAccessObject {
 		if ( $this->daoOrigin === 'db' ) {
 			if ( $this->daoPending ) {
 				$this->logger->debug( get_class( $this ) . ': performing DB update; object changed.' );
-				$dbw->update(
-					static::getTable(),
-					$this->getRowArray( $dbw ),
-					[ $idColumn => $uniqueId ],
-					__METHOD__
-				);
+				$dbw->newUpdateQueryBuilder()
+					->update( static::getTable() )
+					->set( $this->getRowArray( $dbw ) )
+					->where( [ $idColumn => $uniqueId ] )
+					->caller( __METHOD__ )
+					->execute();
 				$this->daoPending = false;
 				return $dbw->affectedRows() > 0;
 			} else {
@@ -213,11 +216,11 @@ abstract class MWOAuthDAO implements IDBAccessObject {
 				// auto-incrementing behavior
 				unset( $row[$acolumn] );
 			}
-			$dbw->insert(
-				static::getTable(),
-				$row,
-				__METHOD__
-			);
+			$dbw->newInsertQueryBuilder()
+				->insertInto( static::getTable() )
+				->row( $row )
+				->caller( __METHOD__ )
+				->execute();
 			if ( $afield !== null ) {
 				// update field for auto-increment field
 				$this->$afield = $dbw->insertId();
@@ -241,11 +244,11 @@ abstract class MWOAuthDAO implements IDBAccessObject {
 			throw new DBReadOnlyError( $dbw, __CLASS__ . ": tried to delete while db is read-only" );
 		}
 		if ( $this->daoOrigin === 'db' ) {
-			$dbw->delete(
-				static::getTable(),
-				[ $idColumn => $uniqueId ],
-				__METHOD__
-			);
+			$dbw->newDeleteQueryBuilder()
+				->deleteFrom( static::getTable() )
+				->where( [ $idColumn => $uniqueId ] )
+				->caller( __METHOD__ )
+				->execute();
 			$this->daoPending = true;
 			return $dbw->affectedRows() > 0;
 		} else {
@@ -266,7 +269,7 @@ abstract class MWOAuthDAO implements IDBAccessObject {
 	 */
 	protected static function getSchema() {
 		// Note: declaring this abstract raises E_STRICT
-		throw new MWException( "getSchema() not defined in " . get_class() );
+		throw new MWException( "getSchema() not defined in " . self::class );
 	}
 
 	/**
@@ -285,7 +288,7 @@ abstract class MWOAuthDAO implements IDBAccessObject {
 	 */
 	protected static function getFieldPermissionChecks() {
 		// Note: declaring this abstract raises E_STRICT
-		throw new LogicException( "getFieldPermissionChecks() not defined in " . get_class() );
+		throw new LogicException( "getFieldPermissionChecks() not defined in " . self::class );
 	}
 
 	/**

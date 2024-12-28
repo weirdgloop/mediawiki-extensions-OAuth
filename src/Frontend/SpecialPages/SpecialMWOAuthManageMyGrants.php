@@ -3,9 +3,7 @@
 namespace MediaWiki\Extension\OAuth\Frontend\SpecialPages;
 
 use ErrorPageError;
-use FormatJson;
-use HTMLForm;
-use IContextSource;
+use MediaWiki\Context\IContextSource;
 use MediaWiki\Extension\OAuth\Backend\Consumer;
 use MediaWiki\Extension\OAuth\Backend\ConsumerAcceptance;
 use MediaWiki\Extension\OAuth\Backend\Utils;
@@ -14,14 +12,15 @@ use MediaWiki\Extension\OAuth\Control\ConsumerAcceptanceSubmitControl;
 use MediaWiki\Extension\OAuth\Control\ConsumerAccessControl;
 use MediaWiki\Extension\OAuth\Frontend\Pagers\ManageMyGrantsPager;
 use MediaWiki\Extension\OAuth\Frontend\UIUtils;
+use MediaWiki\HTMLForm\HTMLForm;
+use MediaWiki\Json\FormatJson;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Permissions\GrantsInfo;
 use MediaWiki\Permissions\GrantsLocalization;
+use MediaWiki\SpecialPage\SpecialPage;
+use MediaWiki\Status\Status;
 use PermissionsError;
-use SpecialPage;
-use Status;
 use stdClass;
-use UserNotLoggedIn;
 use Wikimedia\Rdbms\IDatabase;
 
 /**
@@ -75,16 +74,12 @@ class SpecialMWOAuthManageMyGrants extends SpecialPage {
 	}
 
 	public function execute( $par ) {
-		$user = $this->getUser();
-
 		$this->setHeaders();
 		$this->getOutput()->disallowUserJs();
 		$this->addHelpLink( 'Help:OAuth' );
+		$this->requireNamedUser( 'mwoauth-available-only-to-registered' );
 
-		if ( !$this->getUser()->isRegistered() ) {
-			throw new UserNotLoggedIn();
-		}
-
+		$user = $this->getUser();
 		$permissionManager = MediaWikiServices::getInstance()->getPermissionManager();
 		if ( !$permissionManager->userHasRight( $user, 'mwoauthmanagemygrants' ) ) {
 			throw new PermissionsError( 'mwoauthmanagemygrants' );
@@ -102,13 +97,13 @@ class SpecialMWOAuthManageMyGrants extends SpecialPage {
 		}
 
 		switch ( $typeKey ) {
-		case 'update':
-		case 'revoke':
-			$this->handleConsumerForm( $acceptanceId ?? 0, $typeKey );
-			break;
-		default:
-			$this->showConsumerList();
-			break;
+			case 'update':
+			case 'revoke':
+				$this->handleConsumerForm( $acceptanceId ?? 0, $typeKey );
+				break;
+			default:
+				$this->showConsumerList();
+				break;
 		}
 
 		$this->addSubtitleLinks( $acceptanceId );
@@ -184,8 +179,6 @@ class SpecialMWOAuthManageMyGrants extends SpecialPage {
 			throw new PermissionsError( 'mwoauthviewsuppressed' );
 		}
 
-		$this->getOutput()->addModuleStyles( 'mediawiki.ui.button' );
-
 		$action = '';
 		if ( $this->getRequest()->getCheck( 'renounce' ) ) {
 			$action = 'renounce';
@@ -225,13 +218,13 @@ class SpecialMWOAuthManageMyGrants extends SpecialPage {
 						},
 						$cmraAc->getGrants()
 					),
-					'tooltips' => [
+					'tooltips-html' => [
 						$this->grantsLocalization->getGrantsLink( 'basic' ) =>
-							$this->msg( 'mwoauthmanagemygrants-basic-tooltip' )->text(),
+							$this->msg( 'mwoauthmanagemygrants-basic-tooltip' )->parse(),
 						$this->grantsLocalization->getGrantsLink( 'mwoauth-authonly' ) =>
-							$this->msg( 'mwoauthmanagemygrants-authonly-tooltip' )->text(),
+							$this->msg( 'mwoauthmanagemygrants-authonly-tooltip' )->parse(),
 						$this->grantsLocalization->getGrantsLink( 'mwoauth-authonlyprivate' ) =>
-							$this->msg( 'mwoauthmanagemygrants-authonly-tooltip' )->text(),
+							$this->msg( 'mwoauthmanagemygrants-authonly-tooltip' )->parse(),
 					],
 					'force-options-on' => array_map(
 						static function ( $g ) {

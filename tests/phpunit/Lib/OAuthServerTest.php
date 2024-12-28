@@ -29,8 +29,8 @@ use MediaWiki\Extension\OAuth\Lib\OAuthConsumer;
 use MediaWiki\Extension\OAuth\Lib\OAuthException;
 use MediaWiki\Extension\OAuth\Lib\OAuthRequest;
 use MediaWiki\Extension\OAuth\Lib\OAuthServer;
-use MediaWiki\Extension\OAuth\Lib\OAuthSignatureMethod_HMAC_SHA1;
-use MediaWiki\Extension\OAuth\Lib\OAuthSignatureMethod_PLAINTEXT;
+use MediaWiki\Extension\OAuth\Lib\OAuthSignatureMethodHmacSha1;
+use MediaWiki\Extension\OAuth\Lib\OAuthSignatureMethodPlaintext;
 use MediaWiki\Extension\OAuth\Lib\OAuthToken;
 use PHPUnit\Framework\TestCase;
 
@@ -53,10 +53,10 @@ class OAuthServerTest extends TestCase {
 		$this->request_token  = new OAuthToken('requestkey', 'requestsecret');
 		$this->access_token   = new OAuthToken('accesskey', 'accesssecret');
 
-		$this->hmac_sha1      = new OAuthSignatureMethod_HMAC_SHA1();
-		$this->plaintext      = new OAuthSignatureMethod_PLAINTEXT();
+		$this->hmac_sha1      = new OAuthSignatureMethodHmacSha1();
+		$this->plaintext      = new OAuthSignatureMethodPlaintext();
 
-		$this->server         = new OAuthServer( new Mock_OAuthDataStore() );
+		$this->server         = new OAuthServer( new MockOAuthDataStore() );
 		$this->server->add_signature_method( $this->hmac_sha1 );
 		$this->server->add_signature_method( $this->plaintext );
 	}
@@ -191,7 +191,7 @@ class OAuthServerTest extends TestCase {
 		$request = OAuthRequest::from_consumer_and_token( $this->consumer, $this->access_token, 'POST', 'http://example.com');
 		$request->sign_request( $this->plaintext, $this->consumer, $this->access_token );
 
-		$server = new OAuthServer( new Mock_OAuthDataStore() );
+		$server = new OAuthServer( new MockOAuthDataStore() );
 		$server->add_signature_method( $this->hmac_sha1 );
 
 		$this->expectException(OAuthException::class);

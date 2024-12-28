@@ -22,11 +22,7 @@ namespace MediaWiki\Extension\OAuth\Frontend\SpecialPages;
  */
 
 use Firebase\JWT\JWT;
-use FormatJson;
-use Html;
-use HTMLForm;
-use IContextSource;
-use Linker;
+use MediaWiki\Context\IContextSource;
 use MediaWiki\Extension\OAuth\Backend\Consumer;
 use MediaWiki\Extension\OAuth\Backend\ConsumerAcceptance;
 use MediaWiki\Extension\OAuth\Backend\MWOAuthException;
@@ -39,41 +35,49 @@ use MediaWiki\Extension\OAuth\Lib\OAuthException;
 use MediaWiki\Extension\OAuth\Lib\OAuthToken;
 use MediaWiki\Extension\OAuth\Lib\OAuthUtil;
 use MediaWiki\Extension\OAuth\UserStatementProvider;
+use MediaWiki\Html\Html;
+use MediaWiki\HTMLForm\HTMLForm;
+use MediaWiki\Json\FormatJson;
+use MediaWiki\Linker\Linker;
 use MediaWiki\Logger\LoggerFactory;
+use MediaWiki\Message\Message;
 use MediaWiki\Permissions\GrantsLocalization;
+use MediaWiki\Request\WebRequest;
+use MediaWiki\SpecialPage\SpecialPage;
+use MediaWiki\SpecialPage\UnlistedSpecialPage;
+use MediaWiki\Status\Status;
 use MediaWiki\Title\Title;
+use MediaWiki\User\User;
+use MediaWiki\Utils\UrlUtils;
 use MediaWiki\WikiMap\WikiMap;
-use Message;
 use MWException;
 use OOUI;
 use OOUI\HtmlSnippet;
 use Psr\Log\LoggerInterface;
-use SpecialPage;
-use Status;
-use UnlistedSpecialPage;
-use User;
-use WebRequest;
+use SkinFactory;
 
 /**
  * Page that handles OAuth consumer authorization and token exchange
  */
 class SpecialMWOAuth extends UnlistedSpecialPage {
-	/** @var LoggerInterface */
-	protected $logger;
-
-	/** @var GrantsLocalization */
-	private $grantsLocalization;
+	protected LoggerInterface $logger;
+	private GrantsLocalization $grantsLocalization;
+	private SkinFactory $skinFactory;
+	private UrlUtils $urlUtils;
 
 	/** @var int Defaults to OAuth1 */
 	protected $oauthVersion = Consumer::OAUTH_VERSION_1;
 
-	/**
-	 * @param GrantsLocalization $grantsLocalization
-	 */
-	public function __construct( GrantsLocalization $grantsLocalization ) {
+	public function __construct(
+		GrantsLocalization $grantsLocalization,
+		SkinFactory $skinFactory,
+		UrlUtils $urlUtils
+	) {
 		parent::__construct( 'OAuth' );
 		$this->logger = LoggerFactory::getInstance( 'OAuth' );
 		$this->grantsLocalization = $grantsLocalization;
+		$this->skinFactory = $skinFactory;
+		$this->urlUtils = $urlUtils;
 	}
 
 	public function doesWrites() {
@@ -90,6 +94,13 @@ class SpecialMWOAuth extends UnlistedSpecialPage {
 	}
 
 	public function execute( $subpage ) {
+		if ( $this->getRequest()->getRawVal( 'display' ) === 'popup' ) {
+			// Replace the default skin with a "micro-skin" that omits most of the interface. (T362706)
+			// In the future, we might allow normal skins to serve this mode too, if they advise that
+			// they support it by setting a skin option, so that colors and fonts could stay consistent.
+			$this->getContext()->setSkin( $this->skinFactory->makeSkin( 'authentication-popup' ) );
+		}
+
 		$this->setHeaders();
 
 		$user = $this->getUser();
@@ -136,7 +147,7 @@ class SpecialMWOAuth extends UnlistedSpecialPage {
 					$clientId = $request->getVal( 'client_id', '' );
 					$this->logger->debug( __METHOD__ . ": doing '$subpage' for OAuth2 with " .
 						"client_id '$clientId' for '{$user->getName()}'" );
-					if ( $user->isAnon() ) {
+					if ( !$user->isNamed() ) {
 						// Should not happen, as user login status will already be checked at this point
 						// Just redirect back to REST, it will then redirect to login
 						$this->redirectToREST();
@@ -168,11 +179,10 @@ class SpecialMWOAuth extends UnlistedSpecialPage {
 					$this->logger->debug( __METHOD__ . ": doing '$subpage' with " .
 						"'$requestToken' '$consumerKey' for '{$user->getName()}'" );
 
+					$this->requireNamedUser( 'mwoauth-named-account-required-reason' );
+
 					// TODO? Test that $requestToken exists in memcache
-					if ( $user->isAnon() ) {
-						// Login required on provider wiki
-						$this->requireLogin( 'mwoauth-login-required-reason' );
-					} elseif ( $request->wasPosted() && $request->getCheck( 'cancel' ) ) {
+					if ( $request->wasPosted() && $request->getCheck( 'cancel' ) ) {
 						// Show acceptance cancellation confirmation
 						$this->showCancelPage( $consumerKey );
 					} else {
@@ -266,7 +276,7 @@ class SpecialMWOAuth extends UnlistedSpecialPage {
 					$dbr = Utils::getCentralDB( DB_REPLICA );
 					$access = ConsumerAcceptance::newFromToken( $dbr, $token->key );
 					$localUser = Utils::getLocalUserFromCentralId( $access->getUserId() );
-					if ( !$localUser || !$localUser->isRegistered() ) {
+					if ( !$localUser || !$localUser->isNamed() ) {
 						throw new MWOAuthException( 'mwoauth-invalid-authorization-invalid-user', [
 							Message::rawParam( Linker::makeExternalLink(
 								'https://www.mediawiki.org/wiki/Help:OAuth/Errors#E008',
@@ -278,7 +288,7 @@ class SpecialMWOAuth extends UnlistedSpecialPage {
 							'cmra_id' => $access->getId(),
 						] );
 					} elseif ( $localUser->isLocked() ||
-						$config->get( 'BlockDisablesLogin' ) && $localUser->getBlock()
+						( $config->get( 'BlockDisablesLogin' ) && $localUser->getBlock() )
 					) {
 						throw new MWOAuthException( 'mwoauth-invalid-authorization-blocked-user', [
 							'consumer' => $consumer->getConsumerKey(),
@@ -321,7 +331,7 @@ class SpecialMWOAuth extends UnlistedSpecialPage {
 					if ( $restUrl[0] !== '/' ) {
 						$restUrl = '/' . $restUrl;
 					}
-					$target = wfGetServerUrl( PROTO_CURRENT ) . $restUrl;
+					$target = ( $this->urlUtils->getServer( PROTO_CURRENT ) ?? '' ) . $restUrl;
 
 					$output->redirect( $target );
 					break;
@@ -416,7 +426,9 @@ class SpecialMWOAuth extends UnlistedSpecialPage {
 			'mwoauth-acceptance-cancelled',
 			$cmrAc->getName()
 		);
-		$output->addReturnTo( Title::newMainPage() );
+		if ( $this->getRequest()->getRawVal( 'display' ) !== 'popup' ) {
+			$output->addReturnTo( Title::newMainPage() );
+		}
 	}
 
 	/**
@@ -476,7 +488,7 @@ class SpecialMWOAuth extends UnlistedSpecialPage {
 				'mwoauthserver-bad-consumer-version',
 				[
 					Utils::getCentralUserTalk( $cmrAc->getUserName() ),
-					\Message::rawParam( \Linker::makeExternalLink(
+					Message::rawParam( Linker::makeExternalLink(
 						'https://www.mediawiki.org/wiki/Help:OAuth/Errors#E012',
 						'E012',
 						true
@@ -538,6 +550,7 @@ class SpecialMWOAuth extends UnlistedSpecialPage {
 			}
 		);
 		$form->setId( 'mw-mwoauth-authorize-form' );
+		$form->addHiddenField( 'display', $this->getRequest()->getRawVal( 'display' ) );
 
 		// Possible messages are:
 		// * mwoauth-form-description-allwikis
@@ -605,12 +618,20 @@ class SpecialMWOAuth extends UnlistedSpecialPage {
 			'framed' => false,
 		] );
 
-		$form->addFooterHtml( $this->makePrivacyLink() );
+		if ( $this->getRequest()->getRawVal( 'display' ) !== 'popup' ) {
+			// If not in popup mode, duplicate the "Privacy policy" link from the site footer for
+			// easy access, as the overlaid dialog would cover it. In popup mode, the site footer
+			// with the link is easily accessible below the form, so don't duplicate it.
+			// This should be replaced with the app's own privacy policy link eventually (T64686).
+			$form->addFooterHtml( $this->makePrivacyLink() );
+		}
 
 		$out = $this->getOutput();
 		$out->enableOOUI();
 		$out->addModuleStyles( 'ext.MWOAuth.AuthorizeForm' );
-		$out->addModules( 'ext.MWOAuth.AuthorizeDialog' );
+		if ( $this->getRequest()->getRawVal( 'display' ) !== 'popup' ) {
+			$out->addModules( 'ext.MWOAuth.AuthorizeDialog' );
+		}
 
 		$form->prepareForm();
 		$status = $form->tryAuthorizedSubmit();

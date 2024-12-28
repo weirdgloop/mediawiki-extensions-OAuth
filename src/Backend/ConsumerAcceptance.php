@@ -2,10 +2,11 @@
 
 namespace MediaWiki\Extension\OAuth\Backend;
 
-use FormatJson;
-use IContextSource;
+use MediaWiki\Context\IContextSource;
+use MediaWiki\Json\FormatJson;
 use MediaWiki\MediaWikiServices;
 use Wikimedia\Rdbms\IDatabase;
+use Wikimedia\Rdbms\IDBAccessObject;
 
 /**
  * (c) Aaron Schulz 2013, GPL
@@ -99,12 +100,15 @@ class ConsumerAcceptance extends MWOAuthDAO {
 	 * @return ConsumerAcceptance|bool
 	 */
 	public static function newFromToken( IDatabase $db, $token, $flags = 0 ) {
-		$row = $db->selectRow( static::getTable(),
-			array_values( static::getFieldColumnMap() ),
-			[ 'oaac_access_token' => (string)$token ],
-			__METHOD__,
-			( $flags & self::READ_LOCKING ) ? [ 'FOR UPDATE' ] : []
-		);
+		$queryBuilder = $db->newSelectQueryBuilder()
+			->select( array_values( static::getFieldColumnMap() ) )
+			->from( static::getTable() )
+			->where( [ 'oaac_access_token' => (string)$token ] )
+			->caller( __METHOD__ );
+		if ( $flags & IDBAccessObject::READ_LOCKING ) {
+			$queryBuilder->forUpdate();
+		}
+		$row = $queryBuilder->fetchRow();
 
 		if ( $row ) {
 			$consumer = new self();
@@ -128,17 +132,20 @@ class ConsumerAcceptance extends MWOAuthDAO {
 		IDatabase $db, $userId, $consumer,
 		$wiki, $flags = 0, $oauthVersion = Consumer::OAUTH_VERSION_1
 	) {
-		$row = $db->selectRow( static::getTable(),
-			array_values( static::getFieldColumnMap() ),
-			[
+		$queryBuilder = $db->newSelectQueryBuilder()
+			->select( array_values( static::getFieldColumnMap() ) )
+			->from( static::getTable() )
+			->where( [
 				'oaac_user_id' => $userId,
 				'oaac_consumer_id' => $consumer->getId(),
 				'oaac_oauth_version' => $oauthVersion,
 				'oaac_wiki' => (string)$wiki
-			],
-			__METHOD__,
-			( $flags & self::READ_LOCKING ) ? [ 'FOR UPDATE' ] : []
-		);
+			] )
+			->caller( __METHOD__ );
+		if ( $flags & IDBAccessObject::READ_LOCKING ) {
+			$queryBuilder->forUpdate();
+		}
+		$row = $queryBuilder->fetchRow();
 
 		if ( $row ) {
 			$consumer = new self();
@@ -238,6 +245,7 @@ class ConsumerAcceptance extends MWOAuthDAO {
 		}
 		// For compatibility with other wikis in the farm, un-remap some grants
 		foreach ( Consumer::$mapBackCompatGrants as $old => $new ) {
+			// phpcs:ignore Generic.CodeAnalysis.AssignmentInCondition.FoundInWhileCondition
 			while ( ( $i = array_search( $new, $row['oaac_grants'], true ) ) !== false ) {
 				$row['oaac_grants'][$i] = $old;
 			}
@@ -254,6 +262,7 @@ class ConsumerAcceptance extends MWOAuthDAO {
 
 		// For backwards compatibility, remap some grants
 		foreach ( Consumer::$mapBackCompatGrants as $old => $new ) {
+			// phpcs:ignore Generic.CodeAnalysis.AssignmentInCondition.FoundInWhileCondition
 			while ( ( $i = array_search( $old, $row['oaac_grants'], true ) ) !== false ) {
 				$row['oaac_grants'][$i] = $new;
 			}

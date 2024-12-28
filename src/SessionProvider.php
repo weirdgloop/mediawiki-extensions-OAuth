@@ -2,14 +2,13 @@
 
 namespace MediaWiki\Extension\OAuth;
 
-use ApiBase;
-use ApiMessage;
-use ApiUsageException;
-use ErrorPageError;
 use Exception;
 use GuzzleHttp\Psr7\ServerRequest;
 use InvalidArgumentException;
+use MediaWiki\Api\ApiBase;
+use MediaWiki\Api\ApiMessage;
 use MediaWiki\Api\Hook\ApiCheckCanExecuteHook;
+use MediaWiki\Context\RequestContext;
 use MediaWiki\Extension\OAuth\Backend\Consumer;
 use MediaWiki\Extension\OAuth\Backend\ConsumerAcceptance;
 use MediaWiki\Extension\OAuth\Backend\MWOAuthException;
@@ -20,19 +19,19 @@ use MediaWiki\Hook\MarkPatrolledHook;
 use MediaWiki\Hook\RecentChange_saveHook;
 use MediaWiki\Linker\Linker;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Message\Message;
+use MediaWiki\Request\WebRequest;
 use MediaWiki\Session\ImmutableSessionProviderWithCookie;
 use MediaWiki\Session\SessionBackend;
 use MediaWiki\Session\SessionInfo;
 use MediaWiki\Session\SessionManager;
 use MediaWiki\Session\UserInfo;
 use MediaWiki\Title\Title;
+use MediaWiki\User\User;
 use MediaWiki\User\UserIdentity;
 use MediaWiki\WikiMap\WikiMap;
-use Message;
+use MWRestrictions;
 use RecentChange;
-use RequestContext;
-use User;
-use WebRequest;
 use Wikimedia\Rdbms\DBError;
 
 /**
@@ -64,54 +63,6 @@ class SessionProvider
 		$hookContainer->register( 'ApiCheckCanExecute', $this );
 		$hookContainer->register( 'RecentChange_save', $this );
 		$hookContainer->register( 'MarkPatrolled', $this );
-	}
-
-	/**
-	 * Throw an exception, later.
-	 *
-	 * During session initialization, the framework isn't quite ready to handle an exception.
-	 * Return an anonymous session, and make sure an exception gets thrown once possible.
-	 *
-	 * @param string $key Key for the error message
-	 * @param mixed ...$params Parameters as strings.
-	 * @return SessionInfo
-	 */
-	private function makeException( $key, ...$params ) {
-		$msg = wfMessage( $key, $params );
-
-		if ( defined( 'MW_API' ) ) {
-			MediaWikiServices::getInstance()->getHookContainer()->register(
-				'ApiBeforeMain',
-				// @phan-suppress-next-line PhanPluginNeverReturnFunction Closures should not get doc
-				static function () use ( $msg ) {
-					throw ApiUsageException::newWithMessage( null, $msg );
-				}
-			);
-		} else {
-			MediaWikiServices::getInstance()->getHookContainer()->register(
-				'BeforeInitialize',
-				// @phan-suppress-next-line PhanPluginNeverReturnFunction Closures should not get doc
-				static function () use ( $msg ) {
-					RequestContext::getMain()->getOutput()->setStatusCode( 400 );
-					throw new ErrorPageError( 'errorpagetitle', $msg );
-				}
-			);
-			// Disable file cache, which would be looked up before the BeforeInitialize hook call.
-			MediaWikiServices::getInstance()->getHookContainer()->register(
-				'HTMLFileCache__useFileCache',
-				static function () {
-					return false;
-				}
-			);
-		}
-
-		$id = $this->hashToSessionId( 'bogus' );
-		return new SessionInfo( SessionInfo::MAX_PRIORITY, [
-			'provider' => $this,
-			'id' => $id,
-			'userInfo' => UserInfo::newAnonymous(),
-			'persisted' => false,
-		] );
 	}
 
 	public function provideSessionInfo( WebRequest $request ) {
@@ -226,11 +177,17 @@ class SessionProvider
 				) )
 			);
 		}
-		if ( $localUser->isLocked() ||
-			( $this->config->get( 'BlockDisablesLogin' ) && $localUser->getBlock() )
-		) {
-			$this->logger->debug( 'OAuth request for blocked user {user}', $logData );
+		if ( $localUser->isLocked() ) {
+			$this->logger->debug( 'OAuth request for locked user {user}', $logData );
 			return $this->makeException( 'mwoauth-invalid-authorization-blocked-user' );
+		}
+		if ( $this->config->get( 'BlockDisablesLogin' ) ) {
+			$block = MediaWikiServices::getInstance()->getBlockManager()
+				->getBlock( $localUser, null );
+			if ( $block && $block->isSitewide() ) {
+				$this->logger->debug( 'OAuth request for blocked user {user}', $logData );
+				return $this->makeException( 'mwoauth-invalid-authorization-blocked-user' );
+			}
 		}
 
 		// The consumer is approved or owned by $localUser, and is for this wiki.
@@ -282,6 +239,7 @@ class SessionProvider
 				'rights' => MediaWikiServices::getInstance()
 					->getGrantsInfo()
 					->getGrantRights( $access->getGrants() ),
+				'restrictions' => $consumer->getRestrictions()->toJson(),
 			],
 		] );
 	}
@@ -347,18 +305,18 @@ class SessionProvider
 				[ 'oarc_user_id' => $id ],
 				__METHOD__
 			);
-			$dbw->delete(
-				'oauth_registered_consumer',
-				[ 'oarc_user_id' => $id ],
-				__METHOD__
-			);
+			$dbw->newDeleteQueryBuilder()
+				->deleteFrom( 'oauth_registered_consumer' )
+				->where( [ 'oarc_user_id' => $id ] )
+				->caller( __METHOD__ )
+				->execute();
 
 			// Remove any approvals by this user, too
-			$dbw->delete(
-				'oauth_accepted_consumer',
-				[ 'oaac_user_id' => $id ],
-				__METHOD__
-			);
+			$dbw->newDeleteQueryBuilder()
+				->deleteFrom( 'oauth_accepted_consumer' )
+				->where( [ 'oaac_user_id' => $id ] )
+				->caller( __METHOD__ )
+				->execute();
 		} catch ( DBError $e ) {
 			$dbw->rollback( __METHOD__ );
 			throw $e;
@@ -377,7 +335,7 @@ class SessionProvider
 	 * @param UserIdentity|null $userIdentity
 	 * @return array|null
 	 */
-	private function getSessionData( UserIdentity $userIdentity = null ) {
+	private function getSessionData( ?UserIdentity $userIdentity = null ) {
 		if ( $userIdentity ) {
 			$user = User::newFromIdentity( $userIdentity );
 			$session = $user->getRequest()->getSession();
@@ -408,6 +366,20 @@ class SessionProvider
 		// Should never happen
 		$this->logger->debug( __METHOD__ . ': No provider metadata, returning no rights allowed' );
 		return [];
+	}
+
+	public function getRestrictions( ?array $data ): ?MWRestrictions {
+		if ( $data && isset( $data['restrictions'] ) && is_string( $data['restrictions'] ) ) {
+			try {
+				return MWRestrictions::newFromJson( $data['restrictions'] );
+			} catch ( \InvalidArgumentException $e ) {
+				$this->logger->warning( __METHOD__ . ': Failed to parse restrictions: {restrictions}', [
+					'restrictions' => $data['restrictions']
+				] );
+				return null;
+			}
+		}
+		return null;
 	}
 
 	/**
@@ -456,7 +428,7 @@ class SessionProvider
 	 * @param UserIdentity|null $userIdentity
 	 * @return int|null
 	 */
-	protected function getPublicConsumerId( UserIdentity $userIdentity = null ) {
+	protected function getPublicConsumerId( ?UserIdentity $userIdentity = null ) {
 		$data = $this->getSessionData( $userIdentity );
 		if ( $data && isset( $data['consumerId'] ) ) {
 			return $data['consumerId'];

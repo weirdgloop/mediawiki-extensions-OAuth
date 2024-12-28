@@ -3,27 +3,29 @@
 namespace MediaWiki\Extension\OAuth\Tests\Rest;
 
 use Exception;
-use FormatJson;
 use MediaWiki\Extension\OAuth\Backend\Consumer;
 use MediaWiki\Extension\OAuth\Backend\Utils;
 use MediaWiki\Extension\OAuth\Rest\Handler\ResetClientSecret;
+use MediaWiki\Json\FormatJson;
+use MediaWiki\MainConfigNames;
 use MediaWiki\Rest\Handler;
 use MediaWiki\Rest\ResponseInterface;
+use MediaWiki\User\User;
 use MediaWiki\WikiMap\WikiMap;
+use MediaWikiIntegrationTestCase;
 use MWRestrictions;
-use User;
 
 /**
  * @covers \MediaWiki\Extension\OAuth\Rest\Handler\ResetClientSecret
  * @group Database
  * @group OAuth
  */
-class ResetClientSecretEndpointTest extends EndpointTest {
+class ResetClientSecretEndpointTest extends EndpointTestBase {
 
 	/**
 	 * @var array
 	 */
-	protected $consumerData = [
+	protected const DEFAULT_CONSUMER_DATA = [
 		'id' => null,
 		'consumerKey' => null,
 		'name' => 'rc_test_name',
@@ -53,7 +55,7 @@ class ResetClientSecretEndpointTest extends EndpointTest {
 	/**
 	 * @var array
 	 */
-	private $consumerDataOwnerOnly = [
+	private const OWNER_ONLY_CONSUMER_DATA = [
 		'ownerOnly' => true,
 		'oauth2GrantTypes' => [ 'client_credentials' ],
 	];
@@ -64,16 +66,15 @@ class ResetClientSecretEndpointTest extends EndpointTest {
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->setMwGlobals( [
-			'wgMWOAuthCentralWiki' => WikiMap::getCurrentWikiId(),
-			'wgGroupPermissions' => [
+		$this->overrideConfigValues( [
+			'MWOAuthCentralWiki' => WikiMap::getCurrentWikiId(),
+			MainConfigNames::GroupPermissions => [
 				'*' => [ 'mwoauthupdateownconsumer' => true ]
 			],
 		] );
-		$this->tablesUsed[] = 'oauth_registered_consumer';
 	}
 
-	public function provideTestHandlerExecute() {
+	public static function provideTestHandlerExecute() {
 		return [
 			'Unsupported Media Type' => [
 				[
@@ -82,8 +83,8 @@ class ResetClientSecretEndpointTest extends EndpointTest {
 					'pathParams' => [ 'client_key' => 'INVALID_CLIENT_KEY' ]
 				],
 				[
-					'statusCode' => 415,
-					'reasonPhrase' => 'Unsupported Media Type',
+					'statusCode' => 400,
+					'reasonPhrase' => 'Bad Request',
 					'protocolVersion' => '1.1'
 				]
 			],
@@ -95,8 +96,8 @@ class ResetClientSecretEndpointTest extends EndpointTest {
 					'headers' => [],
 				],
 				[
-					'statusCode' => 415,
-					'reasonPhrase' => 'Unsupported Media Type',
+					'statusCode' => 400,
+					'reasonPhrase' => 'Bad Request',
 					'protocolVersion' => '1.1'
 				]
 			],
@@ -129,21 +130,17 @@ class ResetClientSecretEndpointTest extends EndpointTest {
 					'reasonPhrase' => 'Unauthorized',
 					'protocolVersion' => '1.1'
 				],
-				function () {
+				static function () {
 					$user = User::createNew( 'ResetClientSecretTestUser1' );
 					$centralId = Utils::getCentralIdFromUserName( $user->getName() );
 					$db = Utils::getCentralDB( DB_PRIMARY );
 
-					$this->consumerData['userId'] = $centralId;
-					$this->consumerData['consumerKey'] = '11111111111111111111111111111111';
-					$this->consumerData['deleted'] = true;
-
-					if ( isset( $this->consumerData['restrictions'] ) ) {
-						$this->consumerData['restrictions'] =
-							MWRestrictions::newFromJson( $this->consumerData['restrictions'] );
-					}
-
-					Consumer::newFromArray( $this->consumerData )->save( $db );
+					$consumerData = self::DEFAULT_CONSUMER_DATA;
+					$consumerData['userId'] = $centralId;
+					$consumerData['consumerKey'] = '11111111111111111111111111111111';
+					$consumerData['deleted'] = true;
+					$consumerData['restrictions'] = MWRestrictions::newFromJson( $consumerData['restrictions'] );
+					Consumer::newFromArray( $consumerData )->save( $db );
 
 					return $user;
 				}
@@ -161,21 +158,17 @@ class ResetClientSecretEndpointTest extends EndpointTest {
 					'reasonPhrase' => 'Bad Request',
 					'protocolVersion' => '1.1'
 				],
-				function () {
+				static function () {
 					$user = User::createNew( 'ResetClientSecretTestUser2' );
 					$db = Utils::getCentralDB( DB_PRIMARY );
 
-					$this->consumerData['userId'] = 999;
-					$this->consumerData['consumerKey'] = '22222222222222222222222222222222';
-					$this->consumerData['deleted'] = false;
-					$this->consumerData['name'] = 'test_name_user_mismatch';
-
-					if ( isset( $this->consumerData['restrictions'] ) ) {
-						$this->consumerData['restrictions'] =
-							MWRestrictions::newFromJson( $this->consumerData['restrictions'] );
-					}
-
-					Consumer::newFromArray( $this->consumerData )->save( $db );
+					$consumerData = self::DEFAULT_CONSUMER_DATA;
+					$consumerData['userId'] = 999;
+					$consumerData['consumerKey'] = '22222222222222222222222222222222';
+					$consumerData['deleted'] = false;
+					$consumerData['name'] = 'test_name_user_mismatch';
+					$consumerData['restrictions'] = MWRestrictions::newFromJson( $consumerData['restrictions'] );
+					Consumer::newFromArray( $consumerData )->save( $db );
 
 					return $user;
 				}
@@ -194,21 +187,17 @@ class ResetClientSecretEndpointTest extends EndpointTest {
 					'reasonPhrase' => 'OK',
 					'protocolVersion' => '1.1'
 				],
-				function () {
+				static function () {
 					$user = User::createNew( 'ResetClientSecretTestUser3' );
 					$centralId = Utils::getCentralIdFromUserName( $user->getName() );
 					$db = Utils::getCentralDB( DB_PRIMARY );
 
-					$this->consumerData['userId'] = $centralId;
-					$this->consumerData['consumerKey'] = '33333333333333333333333333333333';
-					$this->consumerData['name'] = 'test_name_user_successful';
-
-					if ( isset( $this->consumerData['restrictions'] ) ) {
-						$this->consumerData['restrictions'] =
-							MWRestrictions::newFromJson( $this->consumerData['restrictions'] );
-					}
-
-					Consumer::newFromArray( $this->consumerData )->save( $db );
+					$consumerData = self::DEFAULT_CONSUMER_DATA;
+					$consumerData['userId'] = $centralId;
+					$consumerData['consumerKey'] = '33333333333333333333333333333333';
+					$consumerData['name'] = 'test_name_user_successful';
+					$consumerData['restrictions'] = MWRestrictions::newFromJson( $consumerData['restrictions'] );
+					Consumer::newFromArray( $consumerData )->save( $db );
 
 					return $user;
 				}
@@ -227,22 +216,18 @@ class ResetClientSecretEndpointTest extends EndpointTest {
 					'reasonPhrase' => 'OK',
 					'protocolVersion' => '1.1'
 				],
-				function () {
+				static function () {
 					$user = User::createNew( 'ResetClientSecretTestUser4' );
 					$centralId = Utils::getCentralIdFromUserName( $user->getName() );
 					$db = Utils::getCentralDB( DB_PRIMARY );
 
-					$this->consumerData['userId'] = $centralId;
-					$this->consumerData['consumerKey'] = '44444444444444444444444444444444';
-					$this->consumerData['name'] = 'test_name_user_successful';
-					$this->consumerData['oauthVersion'] = '2';
-
-					if ( isset( $this->consumerData['restrictions'] ) ) {
-						$this->consumerData['restrictions'] =
-							MWRestrictions::newFromJson( $this->consumerData['restrictions'] );
-					}
-
-					Consumer::newFromArray( $this->consumerData )->save( $db );
+					$consumerData = self::DEFAULT_CONSUMER_DATA;
+					$consumerData['userId'] = $centralId;
+					$consumerData['consumerKey'] = '44444444444444444444444444444444';
+					$consumerData['name'] = 'test_name_user_successful';
+					$consumerData['oauthVersion'] = '2';
+					$consumerData['restrictions'] = MWRestrictions::newFromJson( $consumerData['restrictions'] );
+					Consumer::newFromArray( $consumerData )->save( $db );
 
 					return $user;
 				}
@@ -261,34 +246,30 @@ class ResetClientSecretEndpointTest extends EndpointTest {
 					'reasonPhrase' => 'OK',
 					'protocolVersion' => '1.1'
 				],
-				function () {
+				static function () {
 					$user = User::createNew( 'ResetClientSecretTestUser5' );
 					$centralId = Utils::getCentralIdFromUserName( $user->getName() );
 					$db = Utils::getCentralDB( DB_PRIMARY );
 
-					$this->consumerData['userId'] = $centralId;
-					$this->consumerData['consumerKey'] = '55555555555555555555555555555555';
-					$this->consumerData['name'] = 'test_name_user_successful';
-					$this->consumerData['oauthVersion'] = '2';
-
-					if ( isset( $this->consumerData['restrictions'] ) ) {
-						$this->consumerData['restrictions'] =
-							MWRestrictions::newFromJson( $this->consumerData['restrictions'] );
-					}
-
+					$consumerData = self::DEFAULT_CONSUMER_DATA;
+					$consumerData['userId'] = $centralId;
+					$consumerData['consumerKey'] = '55555555555555555555555555555555';
+					$consumerData['name'] = 'test_name_user_successful';
+					$consumerData['oauthVersion'] = '2';
+					$consumerData['restrictions'] = MWRestrictions::newFromJson( $consumerData['restrictions'] );
 					Consumer::newFromArray(
-						array_merge( $this->consumerData, $this->consumerDataOwnerOnly )
+						array_merge( $consumerData, self::OWNER_ONLY_CONSUMER_DATA )
 					)->save( $db );
 
 					return $user;
 				},
-				function ( ResponseInterface $response ) {
+				static function ( MediaWikiIntegrationTestCase $testCase, ResponseInterface $response ) {
 					$responseBody = FormatJson::decode(
 						$response->getBody()->getContents(),
 						true
 					);
-					$this->assertArrayHasKey( 'access_token', $responseBody );
-					$this->assertMatchesRegularExpression( '/((.*)\.(.*)\.(.*))/', $responseBody['access_token'] );
+					$testCase->assertArrayHasKey( 'access_token', $responseBody );
+					$testCase->assertMatchesRegularExpression( '/((.*)\.(.*)\.(.*))/', $responseBody['access_token'] );
 				}
 			],
 		];

@@ -13,7 +13,7 @@
 	"license-name": "GPL-2.0-or-later",
 	"type": "other",
 	"requires": {
-		"MediaWiki": ">= 1.41"
+		"MediaWiki": ">= 1.43"
 	},
 	"ExtensionFunctions": [
 		"MediaWiki\\Extension\\OAuth\\Backend\\Hooks::onExtensionFunctions"
@@ -51,7 +51,9 @@
 		"OAuth": {
 			"class": "MediaWiki\\Extension\\OAuth\\Frontend\\SpecialPages\\SpecialMWOAuth",
 			"services": [
-				"GrantsLocalization"
+				"GrantsLocalization",
+				"SkinFactory",
+				"UrlUtils"
 			]
 		},
 		"OAuthManageMyGrants": {
@@ -81,6 +83,10 @@
 	},
 	"TestAutoloadNamespaces": {
 		"MediaWiki\\Extension\\OAuth\\Tests\\": "tests/phpunit/"
+	},
+	"TestAutoloadClasses": {
+		"MediaWiki\\Extension\\OAuth\\Tests\\Entity\\MockClientEntity": "tests/phpunit/Entity/MockClientEntity.php",
+		"MediaWiki\\Extension\\OAuth\\Tests\\Entity\\Mock_ClientEntity": "tests/phpunit/Entity/MockClientEntity.php"
 	},
 	"ResourceModules": {
 		"ext.MWOAuth.styles": {
@@ -114,7 +120,8 @@
 		"backend": {
 			"class": "MediaWiki\\Extension\\OAuth\\Backend\\Hooks",
 			"services": [
-				"ChangeTagDefStore"
+				"ChangeTagDefStore",
+				"ConnectionProvider"
 			]
 		},
 		"frontend": {
@@ -142,7 +149,6 @@
 		"SpecialPageAfterExecute": "frontend",
 		"SpecialPageBeforeFormDisplay": "frontend",
 		"BeforeCreateEchoEvent": "MediaWiki\\Extension\\OAuth\\Frontend\\UIHooks::onBeforeCreateEchoEvent",
-		"CentralAuthAbortCentralAuthToken": "MediaWiki\\Extension\\OAuth\\Setup::onCentralAuthAbortCentralAuthToken",
 		"TestCanonicalRedirect": "setup",
 		"SetupAfterCache": "backend",
 		"ApiRsdServiceApis": "backend",
@@ -224,12 +230,12 @@
 			"description": "Controls whether clients are required to send code challenges with OAuth2 requests. This only applies to non-confidential clients"
 		},
 		"OAuth2GrantExpirationInterval": {
-			"description": "Controls validity period for access tokens. Does not apply to owner-only clients, whose access tokens are always non-expiring. Accepts ISO 8601 durations or can be set to \"infinity\" or false for non-expiring tokens",
+			"description": "Controls validity period for access tokens (stored in the cache configured in MWOAuthSessionCacheType). Does not apply to owner-only clients, whose access tokens are always non-expiring. Accepts ISO 8601 durations or can be set to \"infinity\" or false for non-expiring tokens. Defaults to one hour.",
 			"value": "PT1H"
 		},
 		"OAuth2RefreshTokenTTL": {
-			"description": "Controls validity period for refresh tokens. Accepts ISO 8601 durations or can be set to \"infinity\" or false for non-expiring tokens",
-			"value": "PT1M"
+			"description": "Controls validity period for refresh tokens (stored in the cache configured in MWOAuthSessionCacheType). Accepts ISO 8601 durations or can be set to \"infinity\" or false for non-expiring tokens. Defaults to one month.",
+			"value": "P1M"
 		}
 	},
 	"GrantPermissions": {
@@ -241,6 +247,9 @@
 	},
 	"GrantPermissionGroups": {
 		"oauthmanageownclient": "administration"
+	},
+	"GrantRiskGroups": {
+		"oauthmanageownclient": "internal"
 	},
 	"RestRoutes": [
 		{

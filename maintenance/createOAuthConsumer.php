@@ -19,13 +19,13 @@
 
 namespace MediaWiki\Extension\OAuth;
 
-use Maintenance;
+use MediaWiki\Context\RequestContext;
 use MediaWiki\Extension\OAuth\Backend\Consumer;
 use MediaWiki\Extension\OAuth\Backend\Utils;
 use MediaWiki\Extension\OAuth\Control\ConsumerSubmitControl;
+use MediaWiki\Maintenance\Maintenance;
+use MediaWiki\User\User;
 use MWRestrictions;
-use RequestContext;
-use User;
 
 /**
  * @ingroup Maintenance
@@ -61,7 +61,7 @@ class CreateOAuthConsumer extends Maintenance {
 
 	public function execute() {
 		$user = User::newFromName( $this->getOption( 'user' ) );
-		if ( $user->isAnon() ) {
+		if ( !$user->isNamed() ) {
 			$this->fatalError( 'User must be registered' );
 		}
 		if ( $user->getEmail() === '' ) {

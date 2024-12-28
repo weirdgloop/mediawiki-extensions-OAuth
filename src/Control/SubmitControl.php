@@ -2,16 +2,16 @@
 
 namespace MediaWiki\Extension\OAuth\Control;
 
-use ApiMessage;
-use ContextSource;
-use HTMLForm;
-use IContextSource;
 use LogicException;
-use Message;
-use MessageSpecifier;
+use MediaWiki\Api\ApiMessage;
+use MediaWiki\Context\ContextSource;
+use MediaWiki\Context\IContextSource;
+use MediaWiki\HTMLForm\HTMLForm;
+use MediaWiki\Message\Message;
+use MediaWiki\Status\Status;
 use MWException;
-use Status;
 use StatusValue;
+use Wikimedia\Message\MessageSpecifier;
 
 /**
  * (c) Aaron Schulz 2013, GPL
@@ -161,7 +161,7 @@ abstract class SubmitControl extends ContextSource {
 	 * @param HTMLForm|null $form
 	 * @return Message Error message (to be rendered via text()).
 	 */
-	private function getDefaultValidationError( string $field, $value, HTMLForm $form = null ): Message {
+	private function getDefaultValidationError( string $field, $value, ?HTMLForm $form = null ): Message {
 		$errorMessage = $this->msg( 'mwoauth-invalid-field-' . $field );
 		if ( !$errorMessage->isDisabled() ) {
 			return $errorMessage;
@@ -190,7 +190,7 @@ abstract class SubmitControl extends ContextSource {
 	 * @return bool|ApiMessage
 	 * @phan-param string|callable(mixed,array):(bool|StatusValue) $validator
 	 */
-	private function getValidationResult( $validator, $value, array $allValues, HTMLForm $form = null ) {
+	private function getValidationResult( $validator, $value, array $allValues, ?HTMLForm $form = null ) {
 		if ( is_string( $validator ) ) {
 			return preg_match( $validator, $value ?? '' );
 		}
@@ -222,10 +222,7 @@ abstract class SubmitControl extends ContextSource {
 			return $result;
 		}
 
-		$type = gettype( $result );
-		if ( $type === 'object' ) {
-			$type = get_class( $result );
-		}
+		$type = get_debug_type( $result );
 		throw new LogicException( 'Invalid validator return type: ' . $type );
 	}
 

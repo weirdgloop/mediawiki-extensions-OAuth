@@ -3,24 +3,40 @@
 namespace MediaWiki\Extension\OAuth\Tests\Rest;
 
 use Exception;
-use FormatJson;
 use MediaWiki\Extension\OAuth\Rest\Handler\RequestClient;
+use MediaWiki\Json\FormatJson;
+use MediaWiki\MainConfigNames;
 use MediaWiki\Rest\Handler;
 use MediaWiki\Rest\ResponseInterface;
+use MediaWiki\User\User;
 use MediaWiki\WikiMap\WikiMap;
-use User;
+use MediaWikiIntegrationTestCase;
 
 /**
  * @covers \MediaWiki\Extension\OAuth\Rest\Handler\RequestClient
  * @group Database
  * @group OAuth
  */
-class RequestClientEndpointTest extends EndpointTest {
+class RequestClientEndpointTest extends EndpointTestBase {
 
 	/**
 	 * @var array
 	 */
-	private $postParams = [
+	private const DEFAULT_POST_PARAMS = [
+		'name' => 'TestName',
+		'version' => '1.0',
+		'description' => 'TestDescription',
+		'wiki' => '*',
+		'owner_only' => '',
+		'callback_url' => 'https://test.com/oauth',
+		'callback_is_prefix' => '',
+		'email' => 'test@test.com',
+		'is_confidential' => '',
+		'grant_types' => 'client_credentials',
+		'scopes' => '',
+	];
+
+	private const DEFAULT_JSON_BODY = [
 		'name' => 'TestName',
 		'version' => '1.0',
 		'description' => 'TestDescription',
@@ -37,21 +53,21 @@ class RequestClientEndpointTest extends EndpointTest {
 	/**
 	 * @var array
 	 */
-	private $postParamsOwnerOnlyRestriction = [
+	private const JSON_BODY_OWNERS_ONLY_RESTRICTION = [
 		'callback_url' => false,
 	];
 
 	/**
 	 * @var array
 	 */
-	private $postParamsEmailMismatch = [
+	private const JSON_BODY_EMAIL_MISTMATCH = [
 		'email' => '_test@test.com',
 	];
 
 	/**
 	 * @var array
 	 */
-	private $postParamsWrongGrantTypes = [
+	private const JSON_BODY_WRONG_GRANT_TYPES = [
 		'owner_only' => true,
 		'grant_types' => [ 'authorization_code', 'refresh_token' ],
 	];
@@ -59,8 +75,8 @@ class RequestClientEndpointTest extends EndpointTest {
 	/**
 	 * @var array
 	 */
-	private $postParamsOwnerOnly = [
-		'owner_only' => true,
+	private const POST_PARAMS_OWNERS_ONLY = [
+		'owner_only' => '1',
 	];
 
 	/**
@@ -69,17 +85,16 @@ class RequestClientEndpointTest extends EndpointTest {
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->setMwGlobals( [
-			'wgMWOAuthCentralWiki' => WikiMap::getCurrentWikiId(),
-			'wgGroupPermissions' => [
+		$this->overrideConfigValues( [
+			'MWOAuthCentralWiki' => WikiMap::getCurrentWikiId(),
+			MainConfigNames::GroupPermissions => [
 				'*' => [ 'mwoauthproposeconsumer' => true ]
 			],
-			'wgEmailAuthentication' => false
+			MainConfigNames::EmailAuthentication => false,
 		] );
-		$this->tablesUsed[] = 'oauth_registered_consumer';
 	}
 
-	public function provideTestHandlerExecute() {
+	public static function provideTestHandlerExecute() {
 		return [
 			'No POST params' => [
 				[
@@ -97,7 +112,7 @@ class RequestClientEndpointTest extends EndpointTest {
 				[
 					'method' => 'POST',
 					'uri' => self::makeUri( '/oauth2/client' ),
-					'postParams' => $this->postParams,
+					'parsedBody' => self::DEFAULT_JSON_BODY,
 					'headers' => [
 						'Content-Type' => 'application/json'
 					],
@@ -112,7 +127,7 @@ class RequestClientEndpointTest extends EndpointTest {
 				[
 					'method' => 'POST',
 					'uri' => self::makeUri( '/oauth2/client' ),
-					'postParams' => $this->postParams,
+					'parsedBody' => self::DEFAULT_JSON_BODY,
 					'headers' => [
 						'Content-Type' => 'application/json'
 					],
@@ -126,30 +141,11 @@ class RequestClientEndpointTest extends EndpointTest {
 					return User::createNew( 'RequestClientTestUser1' );
 				}
 			],
-			'Missing Content-Type header' => [
-				[
-					'method' => 'POST',
-					'uri' => self::makeUri( '/oauth2/client' ),
-					'postParams' => $this->postParams,
-					'headers' => [],
-				],
-				[
-					'statusCode' => 415,
-					'reasonPhrase' => 'Unsupported Media Type',
-					'protocolVersion' => '1.1'
-				],
-				static function () {
-					$user = User::createNew( 'RequestClientTestUser3' );
-					$user->setEmail( 'test@test.com' );
-
-					return $user;
-				}
-			],
 			'Missing Callback URL for non-OwnerOnly client' => [
 				[
 					'method' => 'POST',
 					'uri' => self::makeUri( '/oauth2/client' ),
-					'postParams' => array_merge( $this->postParams, $this->postParamsOwnerOnlyRestriction ),
+					'parsedBody' => array_merge( self::DEFAULT_JSON_BODY, self::JSON_BODY_OWNERS_ONLY_RESTRICTION ),
 					'headers' => [
 						'Content-Type' => 'application/json'
 					],
@@ -170,7 +166,7 @@ class RequestClientEndpointTest extends EndpointTest {
 				[
 					'method' => 'POST',
 					'uri' => self::makeUri( '/oauth2/client' ),
-					'postParams' => array_merge( $this->postParams, $this->postParamsEmailMismatch ),
+					'parsedBody' => array_merge( self::DEFAULT_JSON_BODY, self::JSON_BODY_EMAIL_MISTMATCH ),
 					'headers' => [
 						'Content-Type' => 'application/json'
 					],
@@ -191,7 +187,7 @@ class RequestClientEndpointTest extends EndpointTest {
 				[
 					'method' => 'POST',
 					'uri' => self::makeUri( '/oauth2/client' ),
-					'postParams' => array_merge( $this->postParams, $this->postParamsWrongGrantTypes ),
+					'parsedBody' => array_merge( self::DEFAULT_JSON_BODY, self::JSON_BODY_WRONG_GRANT_TYPES ),
 					'headers' => [
 						'Content-Type' => 'application/json'
 					],
@@ -212,9 +208,9 @@ class RequestClientEndpointTest extends EndpointTest {
 				[
 					'method' => 'POST',
 					'uri' => self::makeUri( '/oauth2/client' ),
-					'postParams' => $this->postParams,
+					'postParams' => self::DEFAULT_POST_PARAMS,
 					'headers' => [
-						'Content-Type' => 'application/json'
+						'Content-Type' => 'application/x-www-form-urlencoded'
 					],
 				],
 				[
@@ -233,9 +229,9 @@ class RequestClientEndpointTest extends EndpointTest {
 				[
 					'method' => 'POST',
 					'uri' => self::makeUri( '/oauth2/client' ),
-					'postParams' => array_merge( $this->postParams, $this->postParamsOwnerOnly ),
+					'postParams' => array_merge( self::DEFAULT_POST_PARAMS, self::POST_PARAMS_OWNERS_ONLY ),
 					'headers' => [
-						'Content-Type' => 'application/json'
+						'Content-Type' => 'application/x-www-form-urlencoded'
 					],
 				],
 				[
@@ -249,22 +245,22 @@ class RequestClientEndpointTest extends EndpointTest {
 
 					return $user;
 				},
-				function ( ResponseInterface $response ) {
+				static function ( MediaWikiIntegrationTestCase $testCase, ResponseInterface $response ) {
 					$responseBody = FormatJson::decode(
 						$response->getBody()->getContents(),
 						true
 					);
-					$this->assertArrayHasKey( 'access_token', $responseBody );
-					$this->assertMatchesRegularExpression( '/((.*)\.(.*)\.(.*))/', $responseBody['access_token'] );
+					$testCase->assertArrayHasKey( 'access_token', $responseBody );
+					$testCase->assertMatchesRegularExpression( '/((.*)\.(.*)\.(.*))/', $responseBody['access_token'] );
 				},
 			],
 			'Successful scopes values' => [
 				[
 					'method' => 'POST',
 					'uri' => self::makeUri( '/oauth2/client' ),
-					'postParams' => [ 'scopes' => 'basic' ] + $this->postParams,
+					'postParams' => [ 'scopes' => 'basic' ] + self::DEFAULT_POST_PARAMS,
 					'headers' => [
-						'Content-Type' => 'application/json'
+						'Content-Type' => 'application/x-www-form-urlencoded'
 					],
 				],
 				[
@@ -283,9 +279,9 @@ class RequestClientEndpointTest extends EndpointTest {
 				[
 					'method' => 'POST',
 					'uri' => self::makeUri( '/oauth2/client' ),
-					'postParams' => [ 'scopes' => 'mwoauth-authonly' ] + $this->postParams,
+					'postParams' => [ 'scopes' => 'mwoauth-authonly' ] + self::DEFAULT_POST_PARAMS,
 					'headers' => [
-						'Content-Type' => 'application/json'
+						'Content-Type' => 'application/x-www-form-urlencoded'
 					],
 				],
 				[
@@ -304,9 +300,9 @@ class RequestClientEndpointTest extends EndpointTest {
 				[
 					'method' => 'POST',
 					'uri' => self::makeUri( '/oauth2/client' ),
-					'postParams' => [ 'scopes' => 'mwoauth-authonlyprivate' ] + $this->postParams,
+					'postParams' => [ 'scopes' => 'mwoauth-authonlyprivate' ] + self::DEFAULT_POST_PARAMS,
 					'headers' => [
-						'Content-Type' => 'application/json'
+						'Content-Type' => 'application/x-www-form-urlencoded'
 					],
 				],
 				[
@@ -325,7 +321,7 @@ class RequestClientEndpointTest extends EndpointTest {
 				[
 					'method' => 'POST',
 					'uri' => self::makeUri( '/oauth2/client' ),
-					'postParams' => [ 'scopes' => 'wrong' ] + $this->postParams,
+					'parsedBody' => [ 'scopes' => 'wrong' ] + self::DEFAULT_JSON_BODY,
 					'headers' => [
 						'Content-Type' => 'application/json'
 					],

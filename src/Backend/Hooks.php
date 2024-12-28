@@ -8,11 +8,12 @@ use MediaWiki\ChangeTags\Hook\ChangeTagsListActiveHook;
 use MediaWiki\ChangeTags\Hook\ListDefinedTagsHook;
 use MediaWiki\Extension\OAuth\Frontend\OAuthLogFormatter;
 use MediaWiki\Hook\SetupAfterCacheHook;
+use MediaWiki\Status\Status;
 use MediaWiki\Storage\NameTableAccessException;
 use MediaWiki\Storage\NameTableStore;
+use MediaWiki\User\User;
 use MediaWiki\WikiMap\WikiMap;
-use Status;
-use User;
+use Wikimedia\Rdbms\IConnectionProvider;
 
 /**
  * Class containing hooked functions for an OAuth environment
@@ -28,11 +29,17 @@ class Hooks implements
 	/** @var NameTableStore */
 	private $changeTagDefStore;
 
+	/** @var IConnectionProvider */
+	private $connectionProvider;
+
 	/**
 	 * @param NameTableStore $changeTagDefStore
+	 * @param IConnectionProvider $connectionProvider
 	 */
-	public function __construct( NameTableStore $changeTagDefStore ) {
+	public function __construct( NameTableStore $changeTagDefStore, IConnectionProvider $connectionProvider
+	) {
 		$this->changeTagDefStore = $changeTagDefStore;
+		$this->connectionProvider = $connectionProvider;
 	}
 
 	/**
@@ -71,12 +78,20 @@ EOK;
 			$wgLogTypes[] = 'mwoauthconsumer';
 			$wgLogNames['mwoauthconsumer'] = 'mwoauthconsumer-consumer-logpage';
 			$wgLogHeaders['mwoauthconsumer'] = 'mwoauthconsumer-consumer-logpagetext';
-			$wgLogActionsHandlers['mwoauthconsumer/*'] = OAuthLogFormatter::class;
+			$wgLogActionsHandlers['mwoauthconsumer/*'] = [
+				'class' => OAuthLogFormatter::class,
+				'services' => [
+					'LinkRenderer',
+					'TitleFactory',
+					'UserEditTracker',
+				],
+			];
 			$wgActionFilteredLogs['mwoauthconsumer'] = [
 				'approve' => [ 'approve' ],
 				'create-owner-only' => [ 'create-owner-only' ],
 				'disable' => [ 'disable' ],
 				'propose' => [ 'propose' ],
+				'propose-autoapproved' => [ 'propose-autoapproved' ],
 				'reenable' => [ 'reenable' ],
 				'reject' => [ 'reject' ],
 				'update' => [ 'update' ],
@@ -114,16 +129,18 @@ EOK;
 	protected static function doUserIdMerge( $oldid, $newid ) {
 		$dbw = Utils::getCentralDB( DB_PRIMARY );
 		// Merge any consumers register to this user
-		$dbw->update( 'oauth_registered_consumer',
-			[ 'oarc_user_id' => $newid ],
-			[ 'oarc_user_id' => $oldid ],
-			__METHOD__
-		);
+		$dbw->newUpdateQueryBuilder()
+			->update( 'oauth_registered_consumer' )
+			->set( [ 'oarc_user_id' => $newid ] )
+			->where( [ 'oarc_user_id' => $oldid ] )
+			->caller( __METHOD__ )
+			->execute();
 		// Delete any acceptance tokens by the old user ID
-		$dbw->delete( 'oauth_accepted_consumer',
-			[ 'oaac_user_id' => $oldid ],
-			__METHOD__
-		);
+		$dbw->newDeleteQueryBuilder()
+			->deleteFrom( 'oauth_accepted_consumer' )
+			->where( [ 'oaac_user_id' => $oldid ] )
+			->caller( __METHOD__ )
+			->execute();
 	}
 
 	public function onListDefinedTags( &$tags ) {
@@ -150,58 +167,32 @@ EOK;
 		// Step 1: Get the list of (active) consumers' tags for this wiki
 		$db = Utils::getCentralDB( DB_REPLICA );
 		$conds = [
-			$db->makeList( [
-				'oarc_wiki = ' . $db->addQuotes( '*' ),
-				'oarc_wiki = ' . $db->addQuotes( WikiMap::getCurrentWikiId() ),
-			], LIST_OR ),
+			$db->expr( 'oarc_wiki', '=', [ '*', WikiMap::getCurrentWikiId() ] ),
 			'oarc_deleted' => 0,
 		];
 		if ( $activeOnly ) {
-			$conds[] = $db->makeList( [
-				'oarc_stage = ' . Consumer::STAGE_APPROVED,
-				// Proposed consumers are active for the owner, so count them too
-				'oarc_stage = ' . Consumer::STAGE_PROPOSED,
-			], LIST_OR );
+			$conds[] = $db->expr( 'oarc_stage', '=', [ Consumer::STAGE_APPROVED, Consumer::STAGE_PROPOSED ] );
 		}
-		$res = $db->select(
-			'oauth_registered_consumer',
-			[ 'oarc_id' ],
-			$conds,
-			__METHOD__
-		);
+		$res = $db->newSelectQueryBuilder()
+			->select( 'oarc_id' )
+			->from( 'oauth_registered_consumer' )
+			->where( $conds )
+			->caller( __METHOD__ )
+			->fetchResultSet();
 		$allTags = [];
 		foreach ( $res as $row ) {
 			$allTags[] = Utils::getTagName( $row->oarc_id );
 		}
 
 		// Step 2: Return only those that are in use.
-		$tagIds = [];
 		foreach ( $allTags as $tag ) {
 			try {
-				$tagIds[] = $this->changeTagDefStore->getId( $tag );
+				$this->changeTagDefStore->getId( $tag );
 			} catch ( NameTableAccessException $ex ) {
 				continue;
 			}
-		}
-		if ( $tagIds === [] ) {
-			// Nothing to add, return
-			return true;
-		}
-		$conditions = [ 'ct_tag_id' => $tagIds ];
-		$field = 'ct_tag_id';
-
-		if ( $allTags ) {
-			$db = wfGetDB( DB_REPLICA );
-			$res = $db->select(
-				'change_tag',
-				[ $field ],
-				$conditions,
-				__METHOD__,
-				[ 'DISTINCT' ]
-			);
-			foreach ( $res as $row ) {
-				$tags[] = $this->changeTagDefStore->getName( intval( $row->ct_tag_id ) );
-			}
+			// if it has an ID, it's in use
+			$tags[] = $tag;
 		}
 
 		return true;

@@ -4,10 +4,10 @@ namespace MediaWiki\Extension\OAuth\Tests\Entity;
 
 use MediaWiki\Extension\OAuth\Backend\Consumer;
 use MediaWiki\Extension\OAuth\Entity\ClientEntity;
+use MediaWiki\User\User;
 use MWRestrictions;
-use User;
 
-class Mock_ClientEntity extends ClientEntity {
+class MockClientEntity extends ClientEntity {
 	public static function newMock( User $user, $values = [] ) {
 		$now = wfTimestampNow();
 		return ClientEntity::newFromArray( array_merge( [
@@ -38,3 +38,6 @@ class Mock_ClientEntity extends ClientEntity {
 		], $values ) );
 	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( MockClientEntity::class, 'MediaWiki\\Extension\\OAuth\\Tests\\Entity\\Mock_ClientEntity' );

@@ -13,12 +13,12 @@ use MediaWiki\Extension\OAuth\Entity\ScopeEntity;
 use MediaWiki\Extension\OAuth\Repository\AccessTokenRepository;
 use MediaWiki\Extension\OAuth\Repository\ScopeRepository;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Request\WebRequest;
 use MediaWiki\Rest\HttpException;
+use MediaWiki\User\User;
 use MWException;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
-use User;
-use WebRequest;
 
 class ResourceServer {
 	/** @var ResourceServerMiddleware */
@@ -66,7 +66,7 @@ class ResourceServer {
 		if ( is_string( $authHeader ) ) {
 			$authHeader = [ $authHeader ];
 		}
-		if ( !empty( $authHeader ) && strpos( $authHeader[0], 'Bearer' ) === 0 ) {
+		if ( $authHeader && strpos( $authHeader[0], 'Bearer' ) === 0 ) {
 			return true;
 		}
 		return false;

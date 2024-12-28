@@ -21,18 +21,19 @@
 
 namespace MediaWiki\Extension\OAuth\Backend;
 
-use FormatJson;
-use IContextSource;
-use Linker;
 use LogicException;
+use MediaWiki\Context\IContextSource;
 use MediaWiki\Extension\OAuth\Entity\ClientEntity as OAuth2Client;
+use MediaWiki\Json\FormatJson;
+use MediaWiki\Linker\Linker;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Message\Message;
+use MediaWiki\SpecialPage\SpecialPage;
+use MediaWiki\User\User;
 use MediaWiki\WikiMap\WikiMap;
-use Message;
 use MWRestrictions;
-use SpecialPage;
-use User;
 use Wikimedia\Rdbms\IDatabase;
+use Wikimedia\Rdbms\IDBAccessObject;
 
 /**
  * Representation of an OAuth consumer.
@@ -108,6 +109,9 @@ abstract class Consumer extends MWOAuthDAO {
 	public const STAGE_REJECTED = 2;
 	public const STAGE_EXPIRED  = 3;
 	public const STAGE_DISABLED = 4;
+
+	/** @var int|false|null Cache for local ID looked up from $userId */
+	protected $localUserId;
 
 	/**
 	 * Maps stage ids to human-readable names which describe them as a state
@@ -185,7 +189,7 @@ abstract class Consumer extends MWOAuthDAO {
 			'rsaKey'           => 'userCanSee',
 			'email'            => 'userCanSeeEmail',
 			'secretKey'        => 'userCanSeeSecret',
-			'restrictions'     => 'userCanSeePrivate',
+			'restrictions'     => 'userCanSeeSecurity',
 		];
 	}
 
@@ -211,16 +215,19 @@ abstract class Consumer extends MWOAuthDAO {
 	/**
 	 * @param IDatabase $db
 	 * @param string|null $key
-	 * @param int $flags MWOAuthConsumer::READ_* bitfield
+	 * @param int $flags IDBAccessObject::READ_* bitfield
 	 * @return Consumer|false
 	 */
 	public static function newFromKey( IDatabase $db, $key, $flags = 0 ) {
-		$row = $db->selectRow( static::getTable(),
-			array_values( static::getFieldColumnMap() ),
-			[ 'oarc_consumer_key' => (string)$key ],
-			__METHOD__,
-			( $flags & self::READ_LOCKING ) ? [ 'FOR UPDATE' ] : []
-		);
+		$queryBuilder = $db->newSelectQueryBuilder()
+			->select( array_values( static::getFieldColumnMap() ) )
+			->from( static::getTable() )
+			->where( [ 'oarc_consumer_key' => (string)$key ] )
+			->caller( __METHOD__ );
+		if ( $flags & IDBAccessObject::READ_LOCKING ) {
+			$queryBuilder->forUpdate();
+		}
+		$row = $queryBuilder->fetchRow();
 
 		if ( $row ) {
 			return static::newFromRow( $db, $row );
@@ -234,22 +241,25 @@ abstract class Consumer extends MWOAuthDAO {
 	 * @param string $name
 	 * @param string $version
 	 * @param int $userId Central user ID
-	 * @param int $flags MWOAuthConsumer::READ_* bitfield
+	 * @param int $flags IDBAccessObject::READ_* bitfield
 	 * @return Consumer|bool
 	 */
 	public static function newFromNameVersionUser(
 		IDatabase $db, $name, $version, $userId, $flags = 0
 	) {
-		$row = $db->selectRow( static::getTable(),
-			array_values( static::getFieldColumnMap() ),
-			[
+		$queryBuilder = $db->newSelectQueryBuilder()
+			->select( array_values( static::getFieldColumnMap() ) )
+			->from( static::getTable() )
+			->where( [
 				'oarc_name' => (string)$name,
 				'oarc_version' => (string)$version,
 				'oarc_user_id' => (int)$userId
-			],
-			__METHOD__,
-			( $flags & self::READ_LOCKING ) ? [ 'FOR UPDATE' ] : []
-		);
+			] )
+			->caller( __METHOD__ );
+		if ( $flags & IDBAccessObject::READ_LOCKING ) {
+			$queryBuilder->forUpdate();
+		}
+		$row = $queryBuilder->fetchRow();
 
 		if ( $row ) {
 			return static::newFromRow( $db, $row );
@@ -467,6 +477,22 @@ abstract class Consumer extends MWOAuthDAO {
 	}
 
 	/**
+	 * Local ID of the owner (or false if there is no local account).
+	 * @return int|false
+	 */
+	public function getLocalUserId() {
+		if ( $this->localUserId === null ) {
+			$user = Utils::getLocalUserFromCentralId( $this->getUserId() );
+			if ( $user ) {
+				$this->localUserId = $user->getId();
+			} else {
+				$this->localUserId = false;
+			}
+		}
+		return $this->localUserId;
+	}
+
+	/**
 	 * @param MWOAuthDataStore $dataStore
 	 * @param string $verifyCode verification code
 	 * @param string $requestKey original request key from /initiate
@@ -476,7 +502,7 @@ abstract class Consumer extends MWOAuthDAO {
 		$callback = $dataStore->getCallbackUrl( $this->key, $requestKey );
 
 		if ( $callback === 'oob' ) {
-		  $callback = $this->getCallbackUrl();
+			$callback = $this->getCallbackUrl();
 		}
 
 		return wfAppendQuery( $callback, [
@@ -563,7 +589,7 @@ abstract class Consumer extends MWOAuthDAO {
 		global $wgBlockDisablesLogin;
 
 		// Check that user and consumer are in good standing
-		if ( $mwUser->isLocked() || $wgBlockDisablesLogin && $mwUser->getBlock() ) {
+		if ( $mwUser->isLocked() || ( $wgBlockDisablesLogin && $mwUser->getBlock() ) ) {
 			throw new MWOAuthException( 'mwoauthserver-insufficient-rights', [
 				Message::rawParam( Linker::makeExternalLink(
 					'https://www.mediawiki.org/wiki/Help:OAuth/Errors#E007',
@@ -724,6 +750,7 @@ abstract class Consumer extends MWOAuthDAO {
 	protected function encodeRow( IDatabase $db, $row ) {
 		// For compatibility with other wikis in the farm, un-remap some grants
 		foreach ( self::$mapBackCompatGrants as $old => $new ) {
+			// phpcs:ignore Generic.CodeAnalysis.AssignmentInCondition.FoundInWhileCondition
 			while ( ( $i = array_search( $new, $row['oarc_grants'], true ) ) !== false ) {
 				$row['oarc_grants'][$i] = $old;
 			}
@@ -756,6 +783,7 @@ abstract class Consumer extends MWOAuthDAO {
 
 		// For backwards compatibility, remap some grants
 		foreach ( self::$mapBackCompatGrants as $old => $new ) {
+			// phpcs:ignore Generic.CodeAnalysis.AssignmentInCondition.FoundInWhileCondition
 			while ( ( $i = array_search( $old, $row['oarc_grants'], true ) ) !== false ) {
 				$row['oarc_grants'][$i] = $new;
 			}
@@ -783,6 +811,12 @@ abstract class Consumer extends MWOAuthDAO {
 		}
 	}
 
+	/**
+	 * Can the user see a field with "standard" visibility?
+	 * @param string $name Field name
+	 * @param IContextSource $context
+	 * @return true|Message True if allowed, error message otherwise.
+	 */
 	protected function userCanSee( $name, IContextSource $context ) {
 		$permissionManager = MediaWikiServices::getInstance()->getPermissionManager();
 
@@ -795,6 +829,12 @@ abstract class Consumer extends MWOAuthDAO {
 		}
 	}
 
+	/**
+	 * Can the user see a private field?
+	 * @param string $name Field name
+	 * @param IContextSource $context
+	 * @return true|Message True if allowed, error message otherwise.
+	 */
 	protected function userCanSeePrivate( $name, IContextSource $context ) {
 		$permissionManager = MediaWikiServices::getInstance()->getPermissionManager();
 
@@ -805,16 +845,49 @@ abstract class Consumer extends MWOAuthDAO {
 		}
 	}
 
+	/**
+	 * Can the user see the app owner's email?
+	 * @param string $name Field name
+	 * @param IContextSource $context
+	 * @return true|Message True if allowed, error message otherwise.
+	 */
 	protected function userCanSeeEmail( $name, IContextSource $context ) {
-		$permissionManager = MediaWikiServices::getInstance()->getPermissionManager();
+		// although email is not a security-related field, it's handled the same way
+		return $this->userCanSeeSecurity( $name, $context );
+	}
 
-		if ( !$permissionManager->userHasRight( $context->getUser(), 'mwoauthmanageconsumer' ) ) {
+	/**
+	 * Can the user see a field that relates to how the app's owner manages application
+	 * security?
+	 * @param string $name Field name
+	 * @param IContextSource $context
+	 * @return true|Message True if allowed, error message otherwise.
+	 */
+	protected function userCanSeeSecurity( $name, IContextSource $context ) {
+		$permissionManager = MediaWikiServices::getInstance()->getPermissionManager();
+		$user = $context->getUser();
+
+		if ( $user->getId() === $this->getLocalUserId() ) {
+			// owners can always see the details of their apps, unless the app got deleted-suppressed
+			return $this->userCanSee( $name, $context );
+		} elseif ( $this->getOwnerOnly() ) {
+			// owner-only apps are essentially personal API tokens, nobody else's business
+			return $context->msg( 'mwoauth-field-private' );
+		} elseif ( !$permissionManager->userHasRight( $user, 'mwoauthmanageconsumer' ) ) {
+			// if you are not the owner or an admin you definitely shouldn't see security details
 			return $context->msg( 'mwoauth-field-private' );
 		} else {
+			// OAuth admin looking at non-owner-only app. Just need to check  suppression.
 			return $this->userCanSee( $name, $context );
 		}
 	}
 
+	/**
+	 * Can the user see a given field containing credentials? (No.)
+	 * @param string $name Field name
+	 * @param IContextSource $context
+	 * @return true|Message True if allowed, error message otherwise.
+	 */
 	protected function userCanSeeSecret( $name, IContextSource $context ) {
 		return $context->msg( 'mwoauth-field-private' );
 	}

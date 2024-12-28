@@ -3,8 +3,9 @@
 namespace MediaWiki\Extension\OAuth\Tests\Rest;
 
 use Exception;
-use FormatJson;
 use GuzzleHttp\Psr7\Uri;
+use MediaWiki\Context\RequestContext;
+use MediaWiki\Json\FormatJson;
 use MediaWiki\Rest\Handler;
 use MediaWiki\Rest\HttpException;
 use MediaWiki\Rest\RequestData;
@@ -12,15 +13,14 @@ use MediaWiki\Rest\RequestInterface;
 use MediaWiki\Rest\ResponseInterface;
 use MediaWiki\Tests\Rest\Handler\HandlerTestTrait;
 use MediaWiki\Title\Title;
+use MediaWiki\User\User;
 use MediaWikiIntegrationTestCase;
-use RequestContext;
-use User;
 
 /**
  * Class EndpointTest
  * @package MediaWiki\Extension\OAuth\Tests\Rest
  */
-abstract class EndpointTest extends MediaWikiIntegrationTestCase {
+abstract class EndpointTestBase extends MediaWikiIntegrationTestCase {
 
 	use HandlerTestTrait;
 
@@ -30,8 +30,8 @@ abstract class EndpointTest extends MediaWikiIntegrationTestCase {
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->setMwGlobals( [
-			'wgOAuthSecretKey' => base64_encode( random_bytes( 32 ) )
+		$this->overrideConfigValues( [
+			'OAuthSecretKey' => base64_encode( random_bytes( 32 ) )
 		] );
 
 		RequestContext::getMain()->setTitle( Title::newMainPage() );
@@ -40,7 +40,7 @@ abstract class EndpointTest extends MediaWikiIntegrationTestCase {
 	/**
 	 * @return mixed
 	 */
-	abstract public function provideTestHandlerExecute();
+	abstract public static function provideTestHandlerExecute();
 
 	/**
 	 * @param string $path
@@ -62,9 +62,14 @@ abstract class EndpointTest extends MediaWikiIntegrationTestCase {
 	public function testHandlerExecute(
 		array $requestInfo = [],
 		array $responseInfo = [],
-		callable $userCreateCallback = null,
-		callable $extraValidationCallback = null
+		?callable $userCreateCallback = null,
+		?callable $extraValidationCallback = null
 	) {
+		if ( isset( $requestInfo['postParams'] ) ) {
+			$requestInfo['method'] = 'POST';
+			$requestInfo['headers']['content-type'] = 'application/x-www-form-urlencoded';
+		}
+
 		$request = new RequestData( $requestInfo );
 
 		if ( $userCreateCallback ) {
@@ -87,12 +92,18 @@ abstract class EndpointTest extends MediaWikiIntegrationTestCase {
 		if ( isset( $responseInfo['protocolVersion'] ) ) {
 			$this->assertSame( $responseInfo['protocolVersion'], $response->getProtocolVersion() );
 		}
+		if ( isset( $responseInfo['bodyPattern'] ) ) {
+			$expectedPattern = $responseInfo['bodyPattern'];
+			$responseBody = (string)$response->getBody();
+
+			$this->assertMatchesRegularExpression( $expectedPattern, $responseBody );
+		}
 		if ( isset( $responseInfo['body'] ) ) {
 			$expectedBody = is_array( $responseInfo['body'] ) ?
 				$responseInfo['body'] :
 				FormatJson::decode( $responseInfo['body'], true );
 
-			$responseBody = FormatJson::decode( $response->getBody()->getContents(), true );
+			$responseBody = FormatJson::decode( (string)$response->getBody(), true );
 
 			unset( $expectedBody['messageTranslations'] );
 			unset( $responseBody['messageTranslations'] );
@@ -104,12 +115,13 @@ abstract class EndpointTest extends MediaWikiIntegrationTestCase {
 				'statusCode',
 				'reasonPhrase',
 				'protocolVersion',
-				'body'
+				'bodyPattern',
+				'body',
 			] ),
 			'$responseInfo may not contain unknown keys' );
 
 		if ( $extraValidationCallback ) {
-			$extraValidationCallback( $response );
+			$extraValidationCallback( $this, $response );
 		}
 	}
 
