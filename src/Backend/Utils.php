@@ -306,7 +306,7 @@ class Utils {
 			$lookup = MediaWikiServices::getInstance()
 				->getCentralIdLookupFactory()
 				->getLookup( $wgMWOAuthSharedUserSource );
-			$user = $lookup->localUserFromCentralId( $userId, CentralIdLookup::AUDIENCE_RAW );
+			$user = $lookup->localUserFromCentralId( $userId );
 			if ( $user === null || !$lookup->isAttached( $user ) ) {
 				return false;
 			}
@@ -341,7 +341,7 @@ class Utils {
 				if ( !$lookup->isAttached( $user ) ) {
 					$id = false;
 				} else {
-					$id = $lookup->centralIdFromLocalUser( $user, CentralIdLookup::AUDIENCE_RAW );
+					$id = $lookup->centralIdFromLocalUser( $user );
 					if ( $id === 0 ) {
 						$id = false;
 					}
@@ -369,7 +369,7 @@ class Utils {
 			$lookup = MediaWikiServices::getInstance()
 				->getCentralIdLookupFactory()
 				->getLookup( $wgMWOAuthSharedUserSource );
-			$id = $lookup->centralIdFromName( $username, CentralIdLookup::AUDIENCE_RAW );
+			$id = $lookup->centralIdFromName( $username );
 			if ( $id === 0 ) {
 				$id = false;
 			}
